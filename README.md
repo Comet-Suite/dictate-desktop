@@ -21,6 +21,7 @@ Dictate turns speech into text in the application you are already using. Click i
 - **Local speech recognition.** True Parakeet Unified English 0.6B support alongside compatible CrispASR GGUF models.
 - **Less waiting after long recordings.** Background transcription processes speech while you speak. Nothing is inserted before you stop.
 - **Smooth, complete insertion.** One bulk paste per recording, with an optional single Enter. Pauses never submit your shortcut recording.
+- **Automatic numbers.** “twenty” becomes `20`, “five zero” becomes `50`, and “zerozerofive” becomes `005`. Long digit sequences keep their leading zeros without a fixed conversion-length cutoff.
 - **Natural amounts and symbols.** Say “four hundred dollars” or “400 rupees”; get `$400` or `₹400`. Percentages, numeric expressions, spoken email addresses, and 167 explicit symbols are supported.
 - **Two independent global shortcuts.** One controls pop-up visibility; the other starts and commits dictation.
 - **A compact desktop companion.** Moveable pop-up, microphone meter, light/dark settings, model downloads, and idle unloading.
@@ -74,6 +75,11 @@ The microphone and pause controls remain available in the pop-up. Automatic micr
 
 | Say | Result |
 |---|---|
+| twenty | `20` |
+| five zero | `50` |
+| zerozerofive / zero zero five | `005` |
+| one thousand two hundred and thirty four | `1234` |
+| one point zero zero five | `1.005` |
 | four hundred dollars | `$400` |
 | 400 rupees | `₹400` |
 | four hundred rupees and fifty paise | `₹400.50` |
@@ -81,6 +87,8 @@ The microphone and pause controls remain available in the pop-up. Automatic micr
 | two plus two equals four | `2 + 2 = 4` |
 | john dot smith at example dot com | `john.smith@example.com` |
 | at sign, hash sign, dollar sign | `@#$` |
+
+Number conversion applies to recognized dictation, not to unrelated text you type manually. Spaced or joined digit words are supported; leading and fractional zeros are preserved. Standard English cardinal numbers, including lakh/crore and large English scales, are handled exactly without binary floating-point rounding. Number conversion is performed on the assembled recording before its single paste, so background pieces can form one number. There is no fixed digit-count limit in the converter; available memory, model recognition and the destination application's limits still apply. Already formatted numeric dates, URLs and literal email addresses are preserved.
 
 Natural transformations use context rather than blindly changing every “at”, “plus”, or currency word in normal prose. Recognition still depends on the selected model and microphone. The full explicit symbol vocabulary is in [`docs/SYMBOLS.md`](docs/SYMBOLS.md).
 

@@ -28,6 +28,16 @@ Offline dictation with smooth complete-message insertion, background transcripti
 
 This corrects the existing **1.2.0** release; it is not a separate version. Windows Startup apps must also allow Dictate to run.
 
+## Number conversion — included in the same 1.2.0 update
+
+- “twenty” → `20`, “five zero” → `50`, and “zerozerofive” / “zero zero five” → `005`.
+- Converts ordinary spoken cardinal numbers as well as digit-by-digit sequences.
+- Preserves leading zeros and long fractional digit strings without a fixed conversion-length cutoff.
+- Uses exact number handling rather than floating-point rounding; numeric quantities in prose are converted too.
+- Keeps explicit symbol commands, natural currencies, URLs/email addresses and one-paste-after-Stop behavior.
+
+Download the replacement installer from this existing release. The application version remains **1.2.0**; both the startup correction and number conversion are included.
+
 ## Before you install
 
 Quit any running Dictate instance from its tray menu. The installer is unsigned, so Windows SmartScreen may warn. Check the SHA-256 values and only run downloads you trust.

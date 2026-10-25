@@ -56,7 +56,7 @@ import threading
 import time
 import traceback
 import weakref
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 
 _NEEDED = (("numpy", "numpy"), ("PyQt6", "PyQt6"), ("sounddevice", "sounddevice"),
@@ -1473,14 +1473,30 @@ _NUMBER_SCALES = {"hundred": 100, "thousand": 1000, "lakh": 100000, "lakhs": 100
                   "lac": 100000, "lacs": 100000, "million": 1000000,
                   "crore": 10000000, "crores": 10000000, "billion": 1000000000,
                   "trillion": 1000000000000}
+# Standard English short-scale names; digit-by-digit IDs do not depend on
+# this vocabulary and can be as long as the recognized transcript.
+_NUMBER_SCALES.update({name: 10 ** exponent for exponent, name in zip(
+    range(15, 64, 3),
+    "quadrillion quintillion sextillion septillion octillion nonillion decillion "
+    "undecillion duodecillion tredecillion quattuordecillion quindecillion "
+    "sexdecillion septendecillion octodecillion novemdecillion vigintillion".split())})
+_NUMBER_SCALES.update({"googol": 10 ** 100, "centillion": 10 ** 303})
 _NUMBER_NAMES = sorted([*_SMALL_NUMBERS, *_NUMBER_SCALES, "a", "an", "oh", "point", "half", "quarter"], key=len, reverse=True)
 _DIGIT_AMOUNT = r"\d+(?:,\d{2,3})*(?:\.\d+)?"
 _NUMBER_ATOM = r"(?:" + _DIGIT_AMOUNT + "|" + "|".join(map(re.escape, _NUMBER_NAMES)) + r")"
-_NUMBER_PHRASE = r"(?:(?:minus|negative)[ -]+)?" + _NUMBER_ATOM + r"(?:(?:[ \t-]+(?:and[ \t-]+)?)" + _NUMBER_ATOM + r"){0,23}"
+_NUMBER_PHRASE = r"(?:(?:minus|negative)[ -]+|-[ \t]*)?" + _NUMBER_ATOM + r"(?:(?:[ \t-]+(?:and[ \t-]+)?)" + _NUMBER_ATOM + r"){0,23}"
 
 
 def _number_value(phrase):
-    """Parse a number ONLY inside a recognised amount/formula context."""
+    """Parse recognized number words exactly, without a digit-length cutoff."""
+    with localcontext() as context:
+        scale_digits = sum(len(str(_NUMBER_SCALES.get(word, 0))) for word in phrase.lower().replace('-', ' ').split())
+        context.prec = max(64, len(phrase) * 4 + scale_digits)
+        context.Emax = max(context.Emax, context.prec * 2)
+        return _number_value_precise(phrase)
+
+
+def _number_value_precise(phrase):
     text = phrase.strip().lower().replace(",", "")
     negative = text.startswith(("minus ", "negative ", "-"))
     text = re.sub(r"^(?:minus|negative)\s+|^-", "", text).replace("-", " ")
@@ -1508,23 +1524,22 @@ def _number_value(phrase):
             return None
         digits = []
         for word in tail:
-            if word.isdigit():
-                digits.append(word)
-            elif word in _SMALL_NUMBERS and _SMALL_NUMBERS[word] < 10:
-                digits.append(str(_SMALL_NUMBERS[word]))
-            elif word == "oh":
-                digits.append("0")
-            else:
+            block = _digit_block(word)
+            if block is None:
                 return None
+            digits.append(block)
         decimals = "".join(digits)
     unit_tokens = [word for word in tokens if word != "and"]
-    if len(unit_tokens) > 1 and all(word in _SMALL_NUMBERS and _SMALL_NUMBERS[word] < 10 for word in unit_tokens):
-        value = Decimal("".join(str(_SMALL_NUMBERS[word]) for word in unit_tokens))
+    digit_blocks = [_digit_block(word) for word in unit_tokens]
+    if unit_tokens and "and" not in tokens and not fraction and all(block is not None for block in digit_blocks):
+        result = "".join(digit_blocks)
+        return ("-" if negative else "") + result + (("." + decimals) if decimals else "")
     else:
         total, group, previous = Decimal(0), Decimal(0), None
+        previous_number, group_seen, last_scale = None, False, None
         for word in tokens:
             if word == "and":
-                if previous is None:
+                if previous != "scale":
                     return None
                 continue
             if word in ("a", "an"):
@@ -1539,17 +1554,21 @@ def _number_value(phrase):
                 number = None
             if number is not None:
                 # Do not turn unrelated successive number words into an amount.
-                if previous == "unit" and group % 10 != 0:
+                if previous == "unit" and not (previous_number >= 20 and previous_number % 10 == 0 and 0 < number < 10):
                     return None
                 group += number
-                previous = "unit"
+                previous, previous_number, group_seen = "unit", number, True
             elif word in _NUMBER_SCALES:
                 scale = _NUMBER_SCALES[word]
                 if scale == 100:
-                    group = (group or Decimal(1)) * scale
+                    group = (group if group_seen else Decimal(1)) * scale
+                    group_seen = True
                 else:
-                    total += (group or Decimal(1)) * scale
-                    group = Decimal(0)
+                    if last_scale is not None and scale >= last_scale:
+                        total = (total + group) * scale
+                    else:
+                        total += (group if group_seen else Decimal(1)) * scale
+                    group, group_seen, last_scale = Decimal(0), False, scale
                 previous = "scale"
             else:
                 return None
@@ -1564,9 +1583,85 @@ def _number_value(phrase):
         result = format(value, "f")
         if "." in result:
             result = result.rstrip("0").rstrip(".")
-    if len(result) > 40:
-        return None
     return ("-" if negative else "") + (result or "0")
+
+
+# Plain spoken numbers are independent of currency/symbol commands. Digit
+# strings stay strings: leading zeros and arbitrarily long IDs are not rounded.
+_DIGIT_WORDS = {word: str(value) for word, value in _SMALL_NUMBERS.items() if value < 10}
+_DIGIT_WORDS['oh'] = '0'
+_DIGIT_WORD_ALTERNATIVES = '|'.join(sorted(_DIGIT_WORDS, key=len, reverse=True))
+_DIGIT_WORD_PART = re.compile(r'[0-9]+|' + _DIGIT_WORD_ALTERNATIVES, re.I)
+_DIGIT_WORD_BLOCK = re.compile(r'(?:[0-9]|' + _DIGIT_WORD_ALTERNATIVES + r')+', re.I)
+_PLAIN_NUMBER_NAMES = sorted([*_SMALL_NUMBERS, *_NUMBER_SCALES, 'oh', 'point'], key=len, reverse=True)
+_NUMBER_ARTICLE = r'(?:a|an)(?=[ \t]+(?:' + '|'.join(map(re.escape, _NUMBER_SCALES)) + r')(?!\w))'
+_PLAIN_NUMBER_ATOM = r'(?:' + _DIGIT_AMOUNT + '|' + _NUMBER_ARTICLE + '|' + '|'.join(map(re.escape, _PLAIN_NUMBER_NAMES)) + ')'
+_PLAIN_NUMBER_SEPARATOR = r'(?:[ \t]+|(?<=[A-Za-z])-(?=[A-Za-z]))'
+_PLAIN_NUMBER_PATTERN = re.compile(
+    r'(?<![\w@])(?:(?:minus|negative)[ \t]+)?' + _PLAIN_NUMBER_ATOM +
+    r'(?:' + _PLAIN_NUMBER_SEPARATOR + r'(?:and[ \t]+)?' + _PLAIN_NUMBER_ATOM + r')*(?![\w@])', re.I)
+_PLAIN_NUMBER_WORD = re.compile(r'(?<!\w)(?:' + '|'.join(map(re.escape, _SMALL_NUMBERS)) + r')(?!\w)', re.I)
+_PROTECTED_NUMBER_TEXT = re.compile(
+    r'(?:https?://|www\.)[^\s<>]+|(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?!\w)', re.I)
+
+
+def _digit_block(word):
+    if re.fullmatch(r'[0-9]+', word):
+        return word
+    if _DIGIT_WORD_BLOCK.fullmatch(word):
+        return ''.join(match[0] if match[0].isdigit() else _DIGIT_WORDS[match[0].lower()] for match in _DIGIT_WORD_PART.finditer(word))
+    return None
+
+
+def convert_spoken_numbers(text):
+    """Convert standalone cardinals and digit sequences without a length cap."""
+    def convert_segment(segment):
+        def compound(match):
+            word = match[0]
+            digits = _digit_block(word.lower())
+            # Do not change a word containing a number (someone, stone, etc.).
+            # A complete compound such as zerozerofive is an explicit digit ID.
+            return digits if digits is not None and len(digits) > 1 else word
+        segment = re.sub(r'(?<!\w)[A-Za-z0-9]+(?!\w)', compound, segment)
+
+        def number(match):
+            phrase = match[0]
+            words = phrase.lower().replace('-', ' ').split()
+            if not re.search(r'[A-Za-z]', phrase):
+                # Already-numeric dates, grouped phone numbers and IDs stay as
+                # dictated; mixed spoken/literal digits are handled below.
+                return phrase
+            if words in (['a'], ['an'], ['oh'], ['point']):
+                return phrase
+            if words == ['one']:
+                before = segment[:match.start()].lower()
+                after = segment[match.end():].lower()
+                if re.search(r'\b(?:no|any|every|some|the|which|another|this|that)\s+$', before) or re.match(r'\s+(?:of|another)\b', after):
+                    return phrase  # pronouns, not a numeric quantity
+            # Keep a binary "minus" for the formula pass; a standalone signed
+            # number ("negative five" / "minus five") becomes -5.
+            binary_minus = words[0] == 'minus' and re.search(
+                r'(?:\d|\b(?:' + '|'.join(_SMALL_NUMBERS) + r'))\s+$', segment[:match.start()], re.I)
+            prefix = ''
+            candidate = phrase
+            if binary_minus:
+                prefix, candidate = phrase.split(None, 1)
+                prefix += ' '
+            value = _number_value(candidate)
+            if value is not None:
+                return prefix + value
+            # Invalid combinations are separate numbers, not a guessed sum.
+            # Preserve conjunctions rather than turning "one and two" into 12.
+            return _PLAIN_NUMBER_WORD.sub(lambda item: str(_SMALL_NUMBERS[item[0].lower()]), phrase)
+        return _PLAIN_NUMBER_PATTERN.sub(number, segment)
+
+    pieces, previous = [], 0
+    for match in _PROTECTED_NUMBER_TEXT.finditer(text):
+        pieces.append(convert_segment(text[previous:match.start()]))
+        pieces.append(match[0])
+        previous = match.end()
+    pieces.append(convert_segment(text[previous:]))
+    return ''.join(pieces)
 
 
 _CURRENCY_ROWS = [
@@ -1623,7 +1718,7 @@ def _format_currency(symbol, amount):
 
 def normalize_dictation_text(text):
     """Explicit names remain supported; natural symbols require clear context."""
-    text = expand_spoken_symbols(text)
+    text = convert_spoken_numbers(expand_spoken_symbols(text))
 
     def money(match):
         amount = _number_value(match['number'])
@@ -1651,10 +1746,12 @@ def normalize_dictation_text(text):
         cents = Decimal(minor)
         if cents < 0 or cents >= 100 or cents != cents.to_integral_value():
             return match[0]
-        amount = abs(Decimal(major)) + cents / 100
-        if major.startswith('-'):
-            amount = -amount
-        return _format_currency(symbol, f"{amount:.2f}")
+        with localcontext() as context:
+            context.prec = max(64, len(major) + len(minor) + 8)
+            amount = abs(Decimal(major)) + cents / 100
+            if major.startswith('-'):
+                amount = -amount
+            return _format_currency(symbol, f"{amount:.2f}")
 
     text = _MINOR_AMOUNTS.sub(minor_money, text)
     text = _CURRENCY_SUFFIX.sub(money, text)
@@ -4001,6 +4098,14 @@ def _packaging_smoke_test(arguments):
             report["dependencies"][package] = importlib.metadata.version(package)
         assert normalize_dictation_text("four hundred dollars") == "$400"
         assert normalize_dictation_text("400 rupees") == "₹400"
+        assert normalize_dictation_text("five zero") == "50"
+        assert normalize_dictation_text("twenty") == "20"
+        assert normalize_dictation_text("zerozerofive") == "005"
+        long_digits = "005123456789" * 834
+        long_words = " ".join(tuple(_SMALL_NUMBERS)[int(char)] for char in long_digits)
+        assert normalize_dictation_text(long_words) == long_digits
+        report["number_conversion"] = {"five_zero": "50", "twenty": "20", "zerozerofive": "005",
+                                       "verified_digit_count": len(long_digits), "leading_zeros_preserved": True}
         assert len(set(SPOKEN_SYMBOLS.values())) >= 100
         stage("initializing engine and settings")
         engine = Engine()
