@@ -50,5 +50,12 @@ Source: "..\dist\Dictate\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdi
 Name: "{group}\Dictate"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"; AppUserModelID: "CometSuite.Dictate.Desktop"
 Name: "{autodesktop}\Dictate"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#AppExeName}"; AppUserModelID: "CometSuite.Dictate.Desktop"; Tasks: desktopicon
 
+[Registry]
+; The app manages opt-in startup. Remove its entry when this installation is removed.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#AppName}"; Flags: uninsdeletevalue
+
 [Run]
+; Apply a saved enabled/disabled preference even on an upgrade or silent install.
+; This does not enable startup for users who have left the existing switch off.
+Filename: "{app}\{#AppExeName}"; Parameters: "--sync-startup"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#AppExeName}"; Description: "Launch Dictate"; Flags: nowait postinstall skipifsilent

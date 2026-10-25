@@ -59,11 +59,16 @@ if (-not (Test-Path $Setup)) { throw "Installer was not created" }
 
 if ($TestInstaller) {
     $BaseTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-    $InstallRoot = Join-Path $BaseTemp "Dictate-Install-Smoke"
+    $InstallRoot = Join-Path $BaseTemp "Dictate Install Smoke"
     $Installer = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOICONS /DIR=`"$InstallRoot`"" -PassThru
     if (-not $Installer.WaitForExit(240000)) { $Installer.Kill(); throw "Installer timed out" }
     if ($Installer.ExitCode -ne 0) { throw "Installer failed: $($Installer.ExitCode)" }
     Run-Smoke -Exe "$InstallRoot\Dictate.exe" -Report "$Root\release\smoke-installed.json" -Native:$TestNativeModels
+    Run-Command "python" @("tools/check_windows_startup.py", "--exe", "$InstallRoot\Dictate.exe", "--installer", $Setup, "--report", "$Root\release\smoke-windows-startup.json")
+    $InstalledReport = Get-Content "$Root\release\smoke-installed.json" -Raw | ConvertFrom-Json
+    $StartupReport = Get-Content "$Root\release\smoke-windows-startup.json" -Raw | ConvertFrom-Json
+    $InstalledReport | Add-Member -NotePropertyName windows_startup -NotePropertyValue $StartupReport
+    $InstalledReport | ConvertTo-Json -Depth 10 | Set-Content "$Root\release\smoke-installed.json" -Encoding utf8
 }
 
 $Archive = "$Root\release\Dictate-$Version-Windows-x64.zip"

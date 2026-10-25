@@ -29,7 +29,8 @@ Pushing a tag such as `v1.2.0` starts `.github/workflows/windows-release.yml`:
 4. Verify the frozen executable with both native runtimes.
 5. Build the installer and install it silently into a clean temporary directory.
 6. Smoke-test the installed executable, including embedded branding and both shortcut controls.
-7. Create a portable ZIP, SHA-256 checksums and a GitHub release.
+7. Verify real HKCU startup registration, launch the exact registered command from System32, and test preference-preserving reinstalls and uninstall cleanup.
+8. Create a portable ZIP, SHA-256 checksums and publish or update the selected GitHub release.
 
 The build's `GITHUB_TOKEN` is supplied by GitHub Actions with repository-content permissions. No personal token belongs in the source, workflow, installer or release assets.
 
@@ -65,3 +66,15 @@ To distribute a signed installer, sign both the application executable and insta
 ## Native runtime isolation
 
 On Windows, the two speech runtimes contain incompatible DLLs with the same names. Each loaded model therefore runs in its own local worker process. Audio passes through local IPC only; it is not written to a recording file or sent over a network. The packaged entry point calls `multiprocessing.freeze_support()` before starting the GUI, so worker processes do not open duplicate application windows.
+
+## Windows startup verification
+
+`python tools/check_windows_startup.py --exe "PATH WITH SPACES\Dictate.exe" --installer "PATH\Dictate-Setup-1.2.0-x64.exe" --report startup.json` checks the real per-user Run registry value on Windows. Use a disposable installed test copy: the test reinstalls it and finally uninstalls it. Other startup entries and Windows StartupApproved/policy settings are not modified; the prior Dictate Run value is restored.
+
+The test executes the registered command from System32 with the packaged smoke-test argument, rather than assuming a successful registry write means a valid launch command. It checks both saved enabled and saved disabled preferences through silent reinstall. Results are embedded in `smoke-installed.json`. It does **not** reboot the runner or claim a physical sign-in test.
+
+`Dictate.exe --sync-startup` is an internal installer command: it applies the existing saved preference and exits without creating the GUI or opening a microphone. A Run entry adds `--startup`; logon launches skip registry repair so they do not modify the Run key while Windows processes it.
+
+For a requested correction to an existing release, keep its version and release identity. Replace assets only after the Windows verification succeeds; do not create another release for this startup correction.
+
+Registry behavior follows [Microsoft's Run/RunOnce documentation](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys). Windows startup-app controls are documented in [Microsoft Support](https://support.microsoft.com/en-us/windows/experience/startup-boot/configure-startup-applications-in-windows).

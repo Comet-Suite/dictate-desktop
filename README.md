@@ -43,6 +43,16 @@ The installer includes Python and both speech runtimes. **You do not need to ins
 
 A portable ZIP is also provided. Extract the entire archive before running `Dictate.exe`; do not move the executable out of its folder.
 
+## Start with Windows
+
+Enable **Settings → Start on startup**. Dictate will start automatically when **your Windows account signs in**. This remains opt-in; an existing disabled preference is not changed.
+
+The app checks its saved startup preference on a manual launch. The installer also repairs missing or outdated startup registration during a reinstall or upgrade, even with silent installation. Paths containing spaces are quoted, and the installed executable—not an internal Python file—is registered.
+
+If Windows still prevents startup, check **Windows Settings → Apps → Startup → Dictate** (or Task Manager → Startup apps) and enable it there. Dictate does not bypass Windows startup-app restrictions or administrator policies. Windows can delay startup applications while sign-in completes.
+
+To apply the corrected **1.2.0** installer over an existing installation, quit Dictate from its tray menu and rerun the installer. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
+
 ## Record, pause, finish
 
 | Shortcut | Default | Action |

@@ -989,29 +989,60 @@ def save_settings(s):
         pass
 
 
+_WINDOWS_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _startup_command():
+    """Use the installed executable, never PyInstaller's internal script path."""
+    exe = Path(sys.executable).resolve()
+    if getattr(sys, "frozen", False):
+        command = f'"{exe}" --startup'
+    else:
+        pyw = exe.with_name("pythonw.exe")
+        command = f'"{pyw if pyw.is_file() else exe}" "{Path(__file__).resolve()}" --startup'
+    # Run-key commands have a documented 260-character Windows limit.
+    if len(command.encode("utf-16-le")) // 2 > 260:
+        raise ValueError("The Windows startup command is too long.")
+    return command
+
+
 def set_startup(enabled):
-    """Windows: add/remove a Run-key entry for the current user."""
+    """Register this user's startup preference and verify an enabled entry."""
     try:
         import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                             r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE)
         if enabled:
-            exe = Path(sys.executable)
-            pyw = exe.with_name("pythonw.exe")
-            if getattr(sys, "frozen", False):
-                cmd = f'"{exe}"'
-            else:
-                cmd = f'"{pyw if pyw.exists() else exe}" "{Path(__file__).resolve()}"'
-            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, cmd)
-        else:
+            command = _startup_command()
             try:
-                winreg.DeleteValue(key, APP_NAME)
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_RUN_KEY,
+                                    0, winreg.KEY_QUERY_VALUE) as key:
+                    existing, kind = winreg.QueryValueEx(key, APP_NAME)
+                if existing == command and kind == winreg.REG_SZ:
+                    return True
             except FileNotFoundError:
                 pass
-        winreg.CloseKey(key)
+            # A new Windows profile need not have a Run key yet. OpenKey alone
+            # fails there; create only this current user's key when needed.
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _WINDOWS_RUN_KEY,
+                                    0, winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as key:
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
+                existing, kind = winreg.QueryValueEx(key, APP_NAME)
+                return existing == command and kind == winreg.REG_SZ
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WINDOWS_RUN_KEY,
+                                0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, APP_NAME)
+        except FileNotFoundError:
+            pass  # Already disabled, including a profile without a Run key.
         return True
     except Exception:
         return False
+
+
+def sync_startup(settings, *, started_at_login=False):
+    """Repair a saved preference on manual launch/install, not during logon."""
+    if os.name != "nt" or started_at_login:
+        return True
+    return set_startup(bool(settings.get("start_on_startup", False)))
 
 
 def list_input_devices():
@@ -3704,7 +3735,7 @@ class SettingsDialog(QDialog):
 class App:
     MARGIN = 14
 
-    def __init__(self):
+    def __init__(self, *, started_at_login=False):
         _configure_windows_identity()
         self.qt = QApplication(sys.argv)
         self.qt.setWindowIcon(_application_icon())
@@ -3713,6 +3744,7 @@ class App:
         if not self._single.create(1):      # already running: don't open a second copy
             sys.exit(0)
         self.settings = load_settings()
+        startup_ok = sync_startup(self.settings, started_at_login=started_at_login)
         self._dictation_shortcut_registered = False
         self._shortcut_input_filter = _DictationShortcutFilter(self)
         self.engine = Engine()
@@ -3771,6 +3803,9 @@ class App:
             self.say("Loading model...")
         else:
             self.say("Open Settings to download or select a model")
+        if not startup_ok:
+            QTimer.singleShot(1500, lambda: self.say(
+                "Could not update Windows startup. Check Start on startup in Settings.", 6000))
 
     # ---- positions
     def preset_point(self, key):
@@ -4015,7 +4050,12 @@ def _packaging_smoke_test(arguments):
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     sys.excepthook = log_crash
+    if "--sync-startup" in sys.argv:
+        sys.exit(0 if sync_startup(load_settings()) else 1)
+    started_at_login = "--startup" in sys.argv
+    if started_at_login:
+        sys.argv.remove("--startup")
     if "--packaging-smoke-test" in sys.argv:
         sys.exit(_packaging_smoke_test(sys.argv[1:]))
     detach_from_console()
-    App().run()
+    App(started_at_login=started_at_login).run()

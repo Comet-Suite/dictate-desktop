@@ -18,6 +18,16 @@ Offline dictation with smooth complete-message insertion, background transcripti
 - Natural amounts such as “four hundred dollars” → `$400` and “400 rupees” → `₹400`.
 - The same supplied logo in the app, tray, installer, executable and taskbar shortcuts.
 
+## Startup correction — replacement 1.2.0 build
+
+- Repairs a missing or outdated Windows startup entry from your saved **Start on startup** preference.
+- Creates the per-user Run key when needed and verifies the registered command.
+- Reinstalling or upgrading refreshes startup registration without resetting an enabled or disabled preference.
+- Correctly quotes the installed executable and removes its startup entry during uninstall.
+- Keeps the existing interface, two shortcuts, speech engines and dictation behavior unchanged.
+
+This corrects the existing **1.2.0** release; it is not a separate version. Windows Startup apps must also allow Dictate to run.
+
 ## Before you install
 
 Quit any running Dictate instance from its tray menu. The installer is unsigned, so Windows SmartScreen may warn. Check the SHA-256 values and only run downloads you trust.
