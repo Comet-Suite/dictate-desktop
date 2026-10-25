@@ -1133,7 +1133,7 @@ def _native_session_worker(connection, runtime, path, n_threads):
             model = _UnifiedSession(path, n_threads=n_threads)
         else:
             import crispasr
-            model = crispasr.Session(path, n_threads=n_threads, backend="cpu")
+            model = crispasr.Session(path, n_threads=n_threads)
         connection.send(("ready", None))
         while True:
             command, audio = connection.recv()

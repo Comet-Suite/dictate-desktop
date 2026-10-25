@@ -164,15 +164,15 @@ def test_worker_loads_only_requested_runtime_and_closes_it(monkeypatch, runtime)
         calls.append(("unified", path, n_threads))
         return model
 
-    def crisp(path, n_threads, backend):
-        calls.append((backend, path, n_threads))
+    def crisp(path, n_threads):
+        calls.append(("crispasr", path, n_threads))
         return model
 
     monkeypatch.setattr(m, "_UnifiedSession", unified)
     monkeypatch.setitem(sys.modules, "crispasr", SimpleNamespace(Session=crisp))
     pipe = Pipe((("transcribe", np.zeros(10)), ("close", None)))
     m._native_session_worker(pipe, runtime, "model.gguf", 4)
-    assert calls == [("unified" if runtime == "transcribe_cpp" else "cpu", "model.gguf", 4)]
+    assert calls == [("unified" if runtime == "transcribe_cpp" else "crispasr", "model.gguf", 4)]
     assert pipe.sent == [("ready", None), ("text", "private words")]
     assert pipe.closed and closed == [True]
 
