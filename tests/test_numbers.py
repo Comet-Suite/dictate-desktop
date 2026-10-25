@@ -69,7 +69,8 @@ def cardinal(number, use_and=False):
     ('two and a half dollars', '$2.5'),
     ('five zero dollars', '$50'), ('fivezerorupees', 'fivezerorupees'),
     ('five zero rupees', '₹50'), ('zerozerofive percent', '005%'),
-    ('two minus three', '2 - 3'), ('twenty plus five equals twenty five', '20 + 5 = 25'),
+    ('two minus three', '2 - 3'), ('one hundred minus fifty', '100 - 50'),
+    ('one million minus one', '1000000 - 1'), ('two minus negative three', '2 - -3'), ('twenty plus five equals twenty five', '20 + 5 = 25'),
     ('negative twenty degrees Celsius', '-20°C'),
     ('one centillion one', '1' + '0' * 302 + '1'),
     ('one googol and one', '1' + '0' * 99 + '1'),
@@ -124,7 +125,7 @@ def test_large_currency_and_minor_units_are_not_rounded_by_decimal_context():
 
 @pytest.mark.parametrize('text', [
     'someone anyone everyone stone alone none', 'This is the one I wanted.',
-    'No one came.', 'one of a kind', 'Help one another.', 'Oh no!',
+    'No one came.', "One's perspective matters.", 'one of a kind', 'Help one another.', 'Oh no!',
     'zeroone@example.com', 'https://one.example.com/twenty', 'www.twenty.com',
     'release_005 fivezero_suffix product123', '2026-10-25', '50-5',
     '0044 123456 789012', '1,234.050',

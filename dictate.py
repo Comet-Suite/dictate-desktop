@@ -1634,14 +1634,14 @@ def convert_spoken_numbers(text):
             if words in (['a'], ['an'], ['oh'], ['point']):
                 return phrase
             if words == ['one']:
-                before = segment[:match.start()].lower()
-                after = segment[match.end():].lower()
-                if re.search(r'\b(?:no|any|every|some|the|which|another|this|that)\s+$', before) or re.match(r'\s+(?:of|another)\b', after):
+                before = segment[max(0, match.start() - 80):match.start()].lower()
+                after = segment[match.end():match.end() + 40].lower()
+                if re.search(r'\b(?:no|any|every|some|the|which|another|this|that)\s+$', before) or re.match(r"(?:\s+(?:of|another)\b|['’]s\b)", after):
                     return phrase  # pronouns, not a numeric quantity
             # Keep a binary "minus" for the formula pass; a standalone signed
             # number ("negative five" / "minus five") becomes -5.
             binary_minus = words[0] == 'minus' and re.search(
-                r'(?:\d|\b(?:' + '|'.join(_SMALL_NUMBERS) + r'))\s+$', segment[:match.start()], re.I)
+                r'(?:\d|\b(?:' + '|'.join([*_SMALL_NUMBERS, *_NUMBER_SCALES]) + r'))\s+$', segment[max(0, match.start() - 80):match.start()], re.I)
             prefix = ''
             candidate = phrase
             if binary_minus:
