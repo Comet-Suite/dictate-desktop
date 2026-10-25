@@ -17,9 +17,9 @@ function Run-Smoke {
     param([string]$Exe, [string]$Report, [switch]$Native)
     $Arguments = "--packaging-smoke-test `"$Report`""
     if ($Native) {
-        $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
+        $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --model `"$Root\.ci-models\unified.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
     }
-    $Process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
+    $Process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput "$Report.stdout.log" -RedirectStandardError "$Report.stderr.log"
     if (-not $Process.WaitForExit(120000)) {
         $Process.Kill()
         if (Test-Path $Report) { Get-Content $Report }
@@ -27,6 +27,7 @@ function Run-Smoke {
         throw "Packaged smoke test timed out"
     }
     if (Test-Path "$Report.startup.log") { Get-Content "$Report.startup.log" }
+    if (Test-Path "$Report.stderr.log") { Get-Content "$Report.stderr.log" }
     if (Test-Path $Report) { Get-Content $Report }
     if ($Process.ExitCode -ne 0) { throw "Smoke test exited with $($Process.ExitCode)" }
     if (-not (Test-Path $Report)) { throw "Smoke test report is missing" }

@@ -41,7 +41,7 @@ This non-interactive interface is intended for packaging verification, not norma
 .\dist\Dictate\Dictate.exe --packaging-smoke-test .\release\smoke.json
 ```
 
-For native inference, add `--model PATH --audio jfk.wav`. `--model` can be repeated to test both runtimes in the same process. The microphone is never opened by this test.
+For native inference, add `--model PATH --audio jfk.wav`. `--model` can be repeated to test model switching through the same application instance. The microphone is never opened by this test.
 
 ## Branding and Windows identity
 
@@ -61,3 +61,7 @@ Get-FileHash .\release\Dictate-Setup-1.2.0-x64.exe -Algorithm SHA256
 Compare this output with `SHA256SUMS.txt` from the same release. The initial release is **unsigned**. A hash is an integrity check, not an Authenticode signature.
 
 To distribute a signed installer, sign both the application executable and installer using an appropriate code-signing certificate and a timestamp service. Never commit certificate private keys or passwords.
+
+## Native runtime isolation
+
+On Windows, the two speech runtimes contain incompatible DLLs with the same names. Each loaded model therefore runs in its own local worker process. Audio passes through local IPC only; it is not written to a recording file or sent over a network. The packaged entry point calls `multiprocessing.freeze_support()` before starting the GUI, so worker processes do not open duplicate application windows.

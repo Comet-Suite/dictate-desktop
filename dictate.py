@@ -45,6 +45,7 @@ import html
 import importlib
 import json
 import math
+import multiprocessing
 import os
 import queue
 import re
@@ -1117,6 +1118,99 @@ class _UnifiedSession:
             self._model.close()
 
 
+# Both Windows runtimes ship different DLLs named ggml.dll/ggml-base.dll.
+# Keep each native session in its own local process so model switching cannot
+# accidentally bind one runtime against the other's incompatible DLL exports.
+def _native_session_worker(connection, runtime, path, n_threads):
+    model = None
+    try:
+        for name in ("stdout", "stderr"):
+            if getattr(sys, name) is None:
+                setattr(sys, name, open(os.devnull, "w"))
+        if os.name == "nt":
+            ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
+        if runtime == "transcribe_cpp":
+            model = _UnifiedSession(path, n_threads=n_threads)
+        else:
+            import crispasr
+            model = crispasr.Session(path, n_threads=n_threads, backend="cpu")
+        connection.send(("ready", None))
+        while True:
+            command, audio = connection.recv()
+            if command == "close":
+                break
+            try:
+                connection.send(("text", Engine._run(model, audio)))
+            except Exception as exc:
+                connection.send(("error", str(exc) or type(exc).__name__))
+    except (EOFError, BrokenPipeError):
+        pass
+    except Exception as exc:
+        try:
+            connection.send(("error", str(exc) or type(exc).__name__))
+        except (OSError, EOFError):
+            pass
+    finally:
+        if model is not None:
+            try:
+                model.close()
+            except Exception:
+                pass
+        connection.close()
+
+
+class _WindowsNativeSession:
+    def __init__(self, path, n_threads=4, *, runtime="transcribe_cpp"):
+        context = multiprocessing.get_context("spawn")
+        self._connection, child = context.Pipe()
+        self._process = context.Process(target=_native_session_worker,
+                                        args=(child, runtime, str(path), n_threads),
+                                        name="DictateSpeech", daemon=True)
+        self._process.start()
+        child.close()
+        try:
+            status, message = self._receive()
+            if status != "ready":
+                raise RuntimeError(message)
+        except Exception:
+            self.close()
+            raise
+
+    def _receive(self):
+        if not self._connection.poll(180):
+            self.close()
+            raise RuntimeError("The local speech engine did not respond.")
+        try:
+            return self._connection.recv()
+        except (EOFError, OSError) as exc:
+            self.close()
+            raise RuntimeError("The local speech engine stopped unexpectedly.") from exc
+
+    def transcribe(self, audio, sample_rate=16000):
+        if sample_rate != SR:
+            raise ValueError("The speech engine expects 16 kHz mono audio.")
+        self._connection.send(("transcribe", np.ascontiguousarray(audio, dtype=np.float32)))
+        status, text = self._receive()
+        if status != "text":
+            raise RuntimeError(text)
+        return text
+
+    def close(self):
+        if self._connection is not None:
+            try:
+                self._connection.send(("close", None))
+            except (OSError, EOFError):
+                pass
+            self._connection.close()
+            self._connection = None
+        if self._process is not None:
+            self._process.join(2)
+            if self._process.is_alive():
+                self._process.terminate()
+                self._process.join(2)
+            self._process = None
+
+
 # Spoken symbol names. These are output transformations, not keyboard shortcuts
 # or UI controls. Ordinary words such as "at", "hash", "dollar", "plus" and
 # "alpha" are deliberately left alone unless an explicit symbol name is used.
@@ -1797,6 +1891,10 @@ class Engine(QObject):
         package = "transcribe-cpp==0.4.1" if runtime == "transcribe_cpp" else "crispasr"
 
         def get_engine():
+            if os.name == "nt":
+                if importlib.util.find_spec(module) is None:
+                    raise ImportError(module)
+                return functools.partial(_WindowsNativeSession, runtime=runtime)
             imported = importlib.import_module(module)
             return _UnifiedSession if runtime == "transcribe_cpp" else imported.Session
 
@@ -3915,6 +4013,7 @@ def _packaging_smoke_test(arguments):
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     sys.excepthook = log_crash
     if "--packaging-smoke-test" in sys.argv:
         sys.exit(_packaging_smoke_test(sys.argv[1:]))
