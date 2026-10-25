@@ -30,7 +30,7 @@ if license_dir.exists():
 a = Analysis(
     [str(ROOT / 'dictate.py')], pathex=[str(ROOT)],
     binaries=binaries, datas=datas, hiddenimports=hiddenimports,
-    hookspath=[], hooksconfig={}, runtime_hooks=[],
+    hookspath=[], hooksconfig={}, runtime_hooks=[str(ROOT / "packaging" / "runtime_smoke.py")],
     excludes=['tkinter', 'PySide6', 'PyQt5', 'PySide2'],
     noarchive=False,
 )
@@ -43,4 +43,9 @@ exe = EXE(
     version=str(ROOT / 'packaging' / 'version_info.txt'),
     uac_admin=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='Dictate')
+diagnostic = EXE(
+    pyz, a.scripts, [], exclude_binaries=True, name='Dictate-Diagnostics',
+    debug=False, bootloader_ignore_signals=False, strip=False, upx=False,
+    console=True, icon=str(ROOT / 'assets' / 'app.ico'),
+)
+coll = COLLECT(exe, diagnostic, a.binaries, a.datas, strip=False, upx=False, name='Dictate')

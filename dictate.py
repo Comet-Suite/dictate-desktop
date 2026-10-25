@@ -3851,7 +3851,13 @@ def _packaging_smoke_test(arguments):
     report = {"version": VERSION, "frozen": bool(getattr(sys, "frozen", False)),
               "app_id": _WINDOWS_APP_ID, "native_models": []}
     engine = None
+    def stage(name):
+        report["stage"] = name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    stage("entered smoke test")
     try:
+        stage("initializing Qt")
         _configure_windows_identity()
         application = QApplication.instance() or QApplication([APP_NAME])
         application.setWindowIcon(_application_icon())
@@ -3863,6 +3869,7 @@ def _packaging_smoke_test(arguments):
         assert normalize_dictation_text("four hundred dollars") == "$400"
         assert normalize_dictation_text("400 rupees") == "₹400"
         assert len(set(SPOKEN_SYMBOLS.values())) >= 100
+        stage("initializing engine and settings")
         engine = Engine()
         dialog = SettingsDialog(dict(DEFAULTS), engine)
         assert len(dialog.findChildren(QKeySequenceEdit)) == 2
@@ -3870,6 +3877,7 @@ def _packaging_smoke_test(arguments):
         dialog.close()
         # Import both runtime wrappers even if no model is supplied. Native
         # model runs below also catch missing/incompatible DLL dependencies.
+        stage("loading native runtime wrappers")
         import crispasr
         import transcribe_cpp
         assert callable(crispasr.Session), "CrispASR wrapper unavailable"
@@ -3882,9 +3890,11 @@ def _packaging_smoke_test(arguments):
                 pcm = np.frombuffer(audio_file.readframes(audio_file.getnframes()), "<i2").astype(np.float32) / 32768
             for filename in options.model:
                 runtime = _gguf_runtime(filename)
+                stage("loading native model: " + runtime)
                 session_class = engine._import_engine(runtime)
                 session = session_class(str(filename), n_threads=4)
                 try:
+                    stage("running inference: " + runtime)
                     text = engine._run(session, pcm)
                     assert "country" in text.lower(), text
                     report["native_models"].append({"runtime": runtime, "transcript": text})

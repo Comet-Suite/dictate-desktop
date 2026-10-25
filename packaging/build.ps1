@@ -20,10 +20,13 @@ function Run-Smoke {
         $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
     }
     $Process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
-    if (-not $Process.WaitForExit(300000)) {
+    if (-not $Process.WaitForExit(120000)) {
         $Process.Kill()
+        if (Test-Path $Report) { Get-Content $Report }
+        if (Test-Path "$Report.startup.log") { Get-Content "$Report.startup.log" }
         throw "Packaged smoke test timed out"
     }
+    if (Test-Path "$Report.startup.log") { Get-Content "$Report.startup.log" }
     if (Test-Path $Report) { Get-Content $Report }
     if ($Process.ExitCode -ne 0) { throw "Smoke test exited with $($Process.ExitCode)" }
     if (-not (Test-Path $Report)) { throw "Smoke test report is missing" }
@@ -39,7 +42,9 @@ $Inventory = & python -m pip freeze
 $Inventory | Set-Content "release/requirements-build-resolved.txt" -Encoding utf8
 
 if ($TestNativeModels) { Run-Command "python" @("tools/download_smoke_models.py") }
-Run-Smoke -Exe "$Root\dist\Dictate\Dictate.exe" -Report "$Root\release\smoke-frozen.json" -Native:$TestNativeModels
+Run-Smoke -Exe "$Root\dist\Dictate\Dictate-Diagnostics.exe" -Report "$Root\release\smoke-diagnostic.json" -Native:$TestNativeModels
+Run-Smoke -Exe "$Root\dist\Dictate\Dictate.exe" -Report "$Root\release\smoke-frozen.json"
+Remove-Item "$Root\dist\Dictate\Dictate-Diagnostics.exe"
 
 $Compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $Compiler)) {
