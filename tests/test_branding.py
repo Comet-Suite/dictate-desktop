@@ -49,7 +49,18 @@ def test_logo_only_release_preserves_all_runtime_behavior():
         if (len(node.targets)==1 and isinstance(node.targets[0],ast.Tuple)
                 and [getattr(item,'id',None) for item in node.targets[0].elts]==['APP_NAME','VERSION']):
             node.value.elts[1]=ast.Constant('<version>')
-    digest=hashlib.sha256(ast.dump(tree,include_attributes=False).encode()).hexdigest()
+    # ast.dump formatting changed in Python 3.13 (empty fields are omitted).
+    # Use an explicit canonical representation for identical 3.12/3.13 results.
+    def canonical(value):
+        if isinstance(value,ast.AST):
+            return {'type':type(value).__name__,'fields':{
+                name:canonical(item) for name,item in ast.iter_fields(value)
+                if item is not None and item!=[]}}
+        if isinstance(value,list):return [canonical(item) for item in value]
+        if isinstance(value,bytes):return {'bytes':value.hex()}
+        return value
+    encoded=json.dumps(canonical(tree),sort_keys=True,separators=(',',':')).encode()
+    digest=hashlib.sha256(encoded).hexdigest()
     assert digest==expected['runtime_ast_sha256'], 'Only version and logo may differ from v1.2.1'
 
 

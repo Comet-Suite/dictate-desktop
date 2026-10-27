@@ -1,7 +1,7 @@
 {
   "previous_tag": "v1.2.1",
   "previous_commit": "6f5a1103081c9a8986d40dd54e9d365c2ee7d2e2",
-  "runtime_ast_sha256": "7e7df556f89bf52a6b0f4fadd0392f00f683b9be0ff04bbb8cd9b46179e8de97",
+  "runtime_ast_sha256": "08559df5ada3323db48c7fdc2871019769e2486e554b3e7167bc69207da881f2",
   "provided_logo_sha256": "e040f451dc524e1598b5857691526b6e9022b23572c3ee7cbb86905b2035c7f3",
   "embedded_icon_sha256": "0181674d3da6f1f27d7cc7dafec8919916f39d9237af7de6c151ac27e5a7350e",
   "source_dimensions": [
@@ -11,5 +11,6 @@
   "embedded_dimensions": [
     256,
     256
-  ]
+  ],
+  "runtime_ast_format": "canonical AST JSON v1; omit empty/None fields; independent of ast.dump formatting"
 }
