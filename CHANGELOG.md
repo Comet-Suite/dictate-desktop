@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2
+
+- Replace the app, tray/taskbar, executable, installer/shortcut and repository logo with the supplied new artwork.
+- Preserve its colors, transparency and aspect ratio; provide multi-resolution Windows icons.
+- Logo/version-only runtime update: no changes to dictation, layout, shortcuts, symbols, model handling or updater behavior.
+- Distribute through the existing confirmed-install updater, retaining installation location and user data.
+
 ## 1.2.0
 
 - Restore independent show/hide and start/commit dictation shortcuts.

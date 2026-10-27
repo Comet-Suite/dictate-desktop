@@ -31,10 +31,14 @@ Dictate turns speech into text in the application you are already using. Click i
 
 <p align="center"><img src="assets/settings.png" width="1000" alt="Dictate settings showing the two shortcuts and model controls"></p>
 
+## 1.2.2: new logo, same dictation
+
+This release updates the supplied logo in the app/tray/taskbar, Windows executable/installer/shortcuts, and repository branding. Dictation, layout, settings and updater behavior are unchanged. On **1.2.1**, choose **Check for updates** in the tray or Settings, then approve **Install and restart** when the verified 1.2.2 download is ready.
+
 ## Install on Windows
 
 1. Open the **[latest release](https://github.com/Comet-Suite/dictate-desktop/releases/latest)**.
-2. Download `Dictate-Setup-1.2.1-x64.exe` and run it.
+2. Download `Dictate-Setup-1.2.2-x64.exe` and run it.
 3. Open **Dictate** from the Start menu.
 4. In **Settings → Speech model**, download a supported model or select a compatible `.gguf` file.
 5. Wait for the model to load, then click into the text box where you want your words.
@@ -55,7 +59,7 @@ The app checks its saved startup preference on a manual launch. The installer al
 
 If Windows still prevents startup, check **Windows Settings → Apps → Startup → Dictate** (or Task Manager → Startup apps) and enable it there. Dictate does not bypass Windows startup-app restrictions or administrator policies. Windows can delay startup applications while sign-in completes.
 
-To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.1** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
+To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.2** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
 
 ## Record, pause, finish
 

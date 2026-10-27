@@ -20,7 +20,7 @@ PAYLOAD=b'MZ'+b'verified official installer test bytes'*30
 DIGEST=hashlib.sha256(PAYLOAD).hexdigest()
 
 
-def release(version='1.2.2'):
+def release(version='1.2.3'):
     base=f'https://github.com/{m._UPDATE_REPOSITORY}/releases/download/v{version}/'
     name=f'Dictate-Setup-{version}-x64.exe'
     return {'tag_name':'v'+version,'draft':False,'prerelease':False,'assets':[
@@ -44,12 +44,12 @@ def downloads(monkeypatch, candidate, data=PAYLOAD, manifest=None, length=None):
     return urls
 
 
-@pytest.mark.parametrize('old,new', [('1.2.1','1.2.2'),('1.2.9','1.2.10'),('1.9.9','1.10.0'),('1.99.99','2.0.0')])
+@pytest.mark.parametrize('old,new', [('1.2.1','1.2.3'),('1.2.9','1.2.10'),('1.9.9','1.10.0'),('1.99.99','2.0.0')])
 def test_version_comparison_is_numeric_not_lexicographic(old,new):
     assert m._update_candidate(release(new),old)['version']==new
 
 
-@pytest.mark.parametrize('version',['1.2.1','1.2.0','0.99.99'])
+@pytest.mark.parametrize('version',['1.2.2','1.2.1','1.2.0','0.99.99'])
 def test_same_version_and_downgrades_are_not_updates(version):
     assert m._update_candidate(release(version)) is None
 
@@ -68,7 +68,7 @@ def test_unpublished_and_preview_releases_are_ignored(flag):
     lambda r:r['assets'].pop(),
     lambda r:r['assets'].append(deepcopy(r['assets'][0])),
     lambda r:r['assets'][0].update(browser_download_url='https://attacker.example/Dictate.exe'),
-    lambda r:r['assets'][0].update(browser_download_url='https://github.com/Someone/Other/releases/download/v1.2.2/file.exe'),
+    lambda r:r['assets'][0].update(browser_download_url='https://github.com/Someone/Other/releases/download/v1.2.3/file.exe'),
     lambda r:r['assets'][0].update(size=0),
     lambda r:r['assets'][0].update(size=m._UPDATE_MAX_BYTES+1),
     lambda r:r['assets'][0].update(size=True),
@@ -82,7 +82,7 @@ def test_release_assets_are_exact_whitelisted_and_digest_required(mutation):
 
 
 @pytest.mark.parametrize('url',[
-    'http://github.com/Comet-Suite/dictate-desktop/releases/download/v1.2.2/file',
+    'http://github.com/Comet-Suite/dictate-desktop/releases/download/v1.2.3/file',
     'file:///C:/Windows/calc.exe','https://github.com.evil.example/path',
     'https://github.com@evil.example/path','https://evil@github.com/Comet-Suite/dictate-desktop/releases/download/v1/x',
     'https://github.com:8443/Comet-Suite/dictate-desktop/releases/download/v1/x',
@@ -109,7 +109,7 @@ def test_invalid_url_is_rejected_before_any_network_request(monkeypatch):
 
 def test_update_json_bounded_and_object_only(monkeypatch):
     monkeypatch.setattr(m,'_update_open',lambda _:Response(json.dumps(release()).encode()))
-    assert m._update_json()['tag_name']=='v1.2.2'
+    assert m._update_json()['tag_name']=='v1.2.3'
     monkeypatch.setattr(m,'_update_open',lambda _:Response(b'[]'))
     with pytest.raises(ValueError):m._update_json()
     monkeypatch.setattr(m,'_update_open',lambda _:Response(b' '* (2*1024*1024+1)))
@@ -198,7 +198,7 @@ def test_later_means_no_install_no_quit_and_no_repeated_prompt(monkeypatch,tmp_p
     monkeypatch.setattr(m,'_installed_update_directory',lambda:tmp_path)
     launch=Mock();monkeypatch.setattr(m,'_launch_update_helper',launch)
     app.consider_update();app.consider_update()
-    assert app.updater.deferred_version=='1.2.2' and box.call_count==1
+    assert app.updater.deferred_version=='1.2.3' and box.call_count==1
     launch.assert_not_called();app.quit.assert_not_called()
 
 
@@ -260,9 +260,9 @@ def test_background_check_downloads_but_never_installs(qt,monkeypatch,tmp_path):
     monkeypatch.setattr(m,'_update_json',lambda:release())
     monkeypatch.setattr(m,'_download_update',lambda candidate,*a,**kw:tmp_path/candidate['name'])
     launch=Mock();monkeypatch.setattr(m,'_launch_update_helper',launch)
-    updater=m.ReleaseUpdater(tmp_path);updater.deferred_version='1.2.2';updater.check(manual=True)
+    updater=m.ReleaseUpdater(tmp_path);updater.deferred_version='1.2.3';updater.check(manual=True)
     updater._thread.join(2)
-    assert not updater.busy and updater.candidate['version']=='1.2.2' and not updater.deferred_version
+    assert not updater.busy and updater.candidate['version']=='1.2.3' and not updater.deferred_version
     assert 'requires your confirmation' in updater.status
     launch.assert_not_called();updater.shutdown()
 
