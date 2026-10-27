@@ -6,9 +6,13 @@ ROOT = Path(SPECPATH).parent
 
 datas = [(str(ROOT / 'LICENSE'), '.'),
          (str(ROOT / 'THIRD_PARTY_NOTICES.md'), '.'),
+         (str(ROOT / 'packaging' / 'updater.cpp'), 'source'),
          (str(ROOT / 'docs'), 'docs'),
          (str(ROOT / 'assets' / 'app.ico'), 'assets')]
-binaries = []
+helper = ROOT / 'release' / 'Dictate-Updater.exe'
+if not helper.is_file():
+    raise RuntimeError('Build the native update helper first using packaging/build.ps1.')
+binaries = [(str(helper), '.')]
 hiddenimports = [
     'pynput.keyboard._win32', 'pynput.mouse._win32',
     'cffi', '_cffi_backend', '_sounddevice_data',

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Comet-Suite
 # Distributed under GPL-3.0; see LICENSE. No warranty.
 """
-Dictate 1.2.0  -  system-wide offline dictation
+Dictate 1.2.1  -  system-wide offline dictation
 PyQt6 UI + NVIDIA Parakeet Unified / TDT GGUF (local CPU runtimes)
 
 Install:
@@ -34,7 +34,8 @@ How to use:
 Nothing is recorded or saved: audio lives only in RAM until it is transcribed and the
 text is pasted into whatever app has the cursor. A temporary clipboard paste avoids
 slow per-character typing; the previous clipboard is restored when possible, unless
-you copy something else. Only your settings are stored.
+you copy something else. Preferences, optional custom mappings and update installers
+are stored separately; microphone audio is not saved.
 """
 import collections
 import base64
@@ -96,25 +97,27 @@ _ensure_deps()
 
 import numpy as np
 from PyQt6.QtCore import (QEasingCurve, QEvent, QMimeData, QObject, QPoint, QPointF, QPropertyAnimation, QRectF,
-                          QSharedMemory, QThread, Qt, QTimer, pyqtProperty, pyqtSignal, pyqtSlot)
+                          QSharedMemory, QThread, Qt, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QKeySequence, QPainter, QPen,
-                         QPixmap, QPolygonF, QTextCursor)
+                         QDesktopServices, QPixmap, QPolygonF, QTextCursor)
 from PyQt6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
                              QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QMenu, QPlainTextEdit,
-                             QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget)
+                             QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget)
 
-APP_NAME, VERSION = "Dictate", "1.2.0"
+APP_NAME, VERSION = "Dictate", "1.2.1"
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 SETTINGS_FILE = APP_DIR / "settings.json"
 DEFAULTS = {"dark_mode": True, "start_on_startup": False, "model_path": "",
             "position": "bottom_center", "pos": None, "hotkey": "Ctrl+Alt+D",
-            "mic": "", "download_dir": str(APP_DIR / "models"), "unload_min": 0, "size": "medium", "auto_enter": False, "pause_blocks": 8, "stop_mode": "auto", "dict_hotkey": "Ctrl+Alt+Space"}
+            "mic": "", "download_dir": str(APP_DIR / "models"), "unload_min": 0, "size": "medium", "auto_enter": False, "pause_blocks": 8, "stop_mode": "auto", "dict_hotkey": "Ctrl+Alt+Space", "custom_symbols_path": "", "check_updates": True}
 
 PRESET_REPOS = ["cstr/parakeet-tdt-0.6b-v3-GGUF", "cstr/orukeet-GGUF", "cstr/phonon2-GGUF",
                 "cstr/parakeet-redux-GGUF",
                 "handy-computer/parakeet-unified-en-0.6b-gguf"]
-QUANTS = {"Q8_0  -  best accuracy": "q8_0", "Q4_K  -  smallest, a bit faster": "q4_k",
-          "F16  -  full precision (largest)": "f16", "Any  -  first .gguf in the repo": ""}
+QUANTS = {"Q4_K  -  low memory / recommended": "q4_k", "Q4_K_M": "q4_k_m", "Q4_K_S": "q4_k_s",
+          "Q5_K_M": "q5_k_m", "Q5_K_S": "q5_k_s", "Q5_0": "q5_0", "Q6_K": "q6_k",
+          "Q8_0  -  higher precision": "q8_0", "F16  -  unquantized (large)": "f16",
+          "Any  -  prefer low memory": ""}
 
 SR, BLOCK = 16000, 512                 # 16 kHz, 32 ms blocks
 SILENCE_BLOCKS = 22                    # ~0.7 s of silence ends a phrase
@@ -1064,9 +1067,10 @@ def list_input_devices():
 
 
 # The Unified export uses transcribe.cpp's GGUF layout, not CrispASR's layout.
-def _gguf_runtime(path):
+def _gguf_info(path):
     """Inspect only metadata; never guess the runtime from a renamed filename."""
     size = Path(path).stat().st_size
+    info = {"runtime": "crispasr", "architecture": "unknown", "quantization": _model_quantization_name(path), "bytes": size}
     with open(path, "rb") as f:
         def read(n):
             if n < 0 or f.tell() + n > size:
@@ -1115,7 +1119,18 @@ def _gguf_runtime(path):
                 raise ValueError("GGUF metadata is too large.")
             key, kind = string(True), uint32()
             if key.startswith("stt."):
-                return "transcribe_cpp"
+                info["runtime"] = "transcribe_cpp"
+            if key in ("general.architecture", "stt.variant", "general.name") and kind == 8:
+                value = string(True)
+                if key == "general.architecture":
+                    info["architecture"] = value
+                elif key == "stt.variant":
+                    info["variant"] = value
+                continue
+            if key == "general.file_type" and kind == 4:
+                file_type = uint32()
+                info["file_type"] = file_type
+                continue
             if kind == 9:
                 element, count = uint32(), uint64()
                 if count > 2_000_000:
@@ -1123,7 +1138,20 @@ def _gguf_runtime(path):
                 skip(element, count)
             else:
                 skip(kind)
-    return "crispasr"
+    if info['quantization'] == 'unknown' and 'file_type' in info:
+        # CrispASR writes ggml_ftype; Unified uses llama-style mixture codes.
+        # Code 12 is Q4_K in CrispASR, NOT Unified's Q3_K_M.
+        common = {0: 'F32', 1: 'F16', 2: 'Q4_0', 3: 'Q4_1', 7: 'Q8_0', 8: 'Q5_0', 9: 'Q5_1', 10: 'Q2_K'}
+        specific = ({11: 'Q3_K_S', 12: 'Q3_K_M', 13: 'Q3_K_L', 14: 'Q4_K_S', 15: 'Q4_K_M',
+                     16: 'Q5_K_S', 17: 'Q5_K_M', 18: 'Q6_K', 32: 'BF16'}
+                    if info['runtime'] == 'transcribe_cpp' else
+                    {11: 'Q3_K', 12: 'Q4_K', 13: 'Q5_K', 14: 'Q6_K'})
+        info['quantization'] = (common | specific).get(info['file_type'], 'unknown')
+    return info
+
+
+def _gguf_runtime(path):
+    return _gguf_info(path)["runtime"]
 
 
 class _UnifiedSession:
@@ -1171,9 +1199,18 @@ def _native_session_worker(connection, runtime, path, n_threads):
             if command == "close":
                 break
             try:
+                if isinstance(audio, int):
+                    if not 0 <= audio <= 120 * SR:
+                        raise ValueError("Invalid audio packet length.")
+                    raw = connection.recv_bytes(120 * SR * 4)
+                    if len(raw) != audio * 4:
+                        raise ValueError("Incomplete audio packet.")
+                    audio = np.frombuffer(raw, dtype=np.float32)
                 connection.send(("text", Engine._run(model, audio)))
             except Exception as exc:
                 connection.send(("error", str(exc) or type(exc).__name__))
+            finally:
+                audio = raw = None
     except (EOFError, BrokenPipeError):
         pass
     except Exception as exc:
@@ -1191,55 +1228,85 @@ def _native_session_worker(connection, runtime, path, n_threads):
 
 
 class _WindowsNativeSession:
-    def __init__(self, path, n_threads=4, *, runtime="transcribe_cpp"):
+    """Isolated native DLLs; model memory belongs to a disposable child process."""
+    def __init__(self, path, n_threads=4, runtime="crispasr", cancel_event=None):
+        self._cancel_event = cancel_event
         context = multiprocessing.get_context("spawn")
         self._connection, child = context.Pipe()
         self._process = context.Process(target=_native_session_worker,
                                         args=(child, runtime, str(path), n_threads),
                                         name="DictateSpeech", daemon=True)
-        self._process.start()
-        child.close()
         try:
+            self._process.start()
+            child.close()
             status, message = self._receive()
             if status != "ready":
                 raise RuntimeError(message)
         except Exception:
-            self.close()
+            self.close(force=bool(cancel_event is not None and cancel_event.is_set()))
             raise
+        finally:
+            child.close()
 
     def _receive(self):
-        if not self._connection.poll(180):
-            self.close()
-            raise RuntimeError("The local speech engine did not respond.")
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("The local speech engine is closed.")
         try:
-            return self._connection.recv()
+            if self._cancel_event is None:
+                ready = connection.poll(180)
+            else:
+                deadline, ready = time.monotonic() + 180, False
+                while not ready and time.monotonic() < deadline:
+                    if self._cancel_event.is_set():
+                        self.close(force=True)
+                        raise RuntimeError("Speech engine loading was cancelled.")
+                    ready = connection.poll(.2)
+            if not ready:
+                self.close(force=True)
+                raise RuntimeError("The local speech engine did not respond.")
+            return connection.recv()
         except (EOFError, OSError) as exc:
-            self.close()
+            self.close(force=True)
             raise RuntimeError("The local speech engine stopped unexpectedly.") from exc
 
     def transcribe(self, audio, sample_rate=16000):
         if sample_rate != SR:
             raise ValueError("The speech engine expects 16 kHz mono audio.")
-        self._connection.send(("transcribe", np.ascontiguousarray(audio, dtype=np.float32)))
+        audio = np.ascontiguousarray(audio, dtype=np.float32)
+        if audio.ndim != 1:
+            raise ValueError("The speech engine expects mono audio.")
+        if audio.size == 0:
+            return ""
+        if audio.size > SR * 120:
+            raise ValueError("The speech engine accepts at most 120 seconds per packet.")
+        if self._connection is None:
+            raise RuntimeError("The local speech engine is closed.")
+        self._connection.send(("transcribe", int(audio.size)))
+        self._connection.send_bytes(memoryview(audio).cast("B"))
         status, text = self._receive()
         if status != "text":
             raise RuntimeError(text)
         return text
 
-    def close(self):
-        if self._connection is not None:
-            try:
-                self._connection.send(("close", None))
-            except (OSError, EOFError):
-                pass
-            self._connection.close()
-            self._connection = None
-        if self._process is not None:
-            self._process.join(2)
-            if self._process.is_alive():
-                self._process.terminate()
-                self._process.join(2)
-            self._process = None
+    def close(self, force=False):
+        connection, self._connection = self._connection, None
+        process, self._process = self._process, None
+        if force and process is not None and process.is_alive():
+            process.terminate()
+        if connection is not None:
+            if not force:
+                try:
+                    connection.send(("close", None))
+                except (OSError, EOFError):
+                    pass
+            connection.close()
+        if process is not None and getattr(process, "pid", True) is not None:
+            process.join(2)
+            if process.is_alive():
+                process.terminate()
+                process.join(2)
+
 
 
 # Spoken symbol names. These are output transformations, not keyboard shortcuts
@@ -1716,8 +1783,158 @@ def _format_currency(symbol, amount):
     return symbol + amount
 
 
-def normalize_dictation_text(text):
+# User mappings are data, not Python or regular expressions. Replacements are
+# shielded while built-in number/symbol commands run, so literal text stays literal.
+class CustomSymbols:
+    MAX_BYTES = 4 * 1024 * 1024
+
+    def __init__(self, path=""):
+        self.path, self.error = "", ""
+        self._signature, self._pattern, self._values = None, None, {}
+        self._compiled = (None, {})
+        if path:
+            self.configure(path)
+
+    @staticmethod
+    def parse(text):
+        values = {}
+        for line_number, line in enumerate(text.lstrip('\ufeff').splitlines(), 1):
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            phrase, separator, replacement = line.partition('=')
+            phrase = re.sub(r'[ \t]+', ' ', phrase.strip()).casefold()
+            if not separator or not phrase:
+                raise ValueError(f"Custom symbols line {line_number}: use phrase = replacement.")
+            replacement = replacement.strip()
+            if replacement.startswith('"'):
+                try:
+                    replacement = json.loads(replacement)
+                    if not isinstance(replacement, str):
+                        raise ValueError()
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"Custom symbols line {line_number}: invalid quoted text.") from exc
+            else:
+                replacement = re.sub(r'\\([ntr\\])', lambda item: {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\'}[item[1]], replacement)
+            if '\x00' in phrase or '\x00' in replacement:
+                raise ValueError(f"Custom symbols line {line_number}: NUL characters are not allowed.")
+            if len(phrase) > 256 or (len(values) >= 5000 and phrase not in values):
+                raise ValueError('Use at most 5,000 phrases, each at most 256 characters.')
+            values[phrase] = replacement.replace('\r\n', '\n').replace('\r', '\n')
+        return values
+
+    def configure(self, path):
+        path = str(Path(path).expanduser().resolve()) if path else ''
+        if not path:
+            self.path, self._signature, self._pattern, self._values, self.error = '', None, None, {}, ''
+            self._compiled = (None, {})
+            return
+        source = Path(path)
+        if source.suffix.lower() != '.txt':
+            raise ValueError('Choose a UTF-8 .txt custom-symbols file.')
+        stat = source.stat()
+        if stat.st_size > self.MAX_BYTES:
+            raise ValueError('The custom-symbols file exceeds the 4 MiB safety limit.')
+        with source.open('rb') as stream:
+            raw = stream.read(self.MAX_BYTES + 1)
+        if len(raw) > self.MAX_BYTES:
+            raise ValueError('The custom-symbols file exceeds the 4 MiB safety limit.')
+        values = self.parse(raw.decode('utf-8-sig'))
+        alternatives = []
+        for phrase in sorted(values, key=len, reverse=True):
+            escaped = r'[ \t]+'.join(re.escape(word) for word in phrase.split(' '))
+            left = r'(?<!\w)' if phrase[0].isalnum() or phrase[0] == '_' else ''
+            right = r'(?!\w)' if phrase[-1].isalnum() or phrase[-1] == '_' else ''
+            alternatives.append(left + escaped + right)
+        pattern = re.compile('|'.join(alternatives)) if alternatives else None
+        self.path, self._signature = path, (stat.st_mtime_ns, stat.st_size)
+        self._pattern, self._values, self.error = pattern, values, ''
+        self._compiled = (pattern, values)
+
+    def refresh(self):
+        if self.path:
+            try:
+                stat = Path(self.path).stat()
+                if (stat.st_mtime_ns, stat.st_size) != self._signature:
+                    self.configure(self.path)
+            except (OSError, ValueError) as exc:
+                self.error = 'Custom symbols: ' + str(exc) + ' Last valid mappings remain active.'
+
+    def protect(self, text, reserve):
+        self.refresh()
+        pattern, values = self._compiled
+        if pattern is None:
+            return text
+        # Unicode casefold can expand one character (ß -> ss). Keep offsets into
+        # the original text rather than indexing a differently-sized string.
+        folded, positions = [], []
+        for index, char in enumerate(text):
+            value = char.casefold()
+            folded.append(value)
+            positions.extend([index] * len(value))
+        pieces, cursor = [], 0
+        for match in pattern.finditer(''.join(folded)):
+            start, end = positions[match.start()], positions[match.end() - 1] + 1
+            if (match.start() and positions[match.start() - 1] == start) or (match.end() < len(positions) and positions[match.end()] == end - 1):
+                continue
+            pieces.extend((text[cursor:start], reserve(values[re.sub(r'[ \t]+', ' ', match[0])])))
+            cursor = end
+        pieces.append(text[cursor:])
+        return ''.join(pieces)
+
+
+def _prepare_text_commands(text, custom_symbols=None):
+    nonce = os.urandom(12).hex()
+    protected = {}
+
+    def reserve(value):
+        token = '\ue000' + nonce + '_' + str(len(protected)) + '\ue001'
+        protected[token] = value
+        return token
+    text = _PROTECTED_NUMBER_TEXT.sub(lambda match: reserve(match[0]), text)
+    if custom_symbols is not None:
+        text = custom_symbols.protect(text, reserve)
+    # Say "literal enter" when the actual word is intended. Custom mappings can
+    # also override enter. No key event is generated by either form.
+    text = re.sub(r'(?<!\w)literal[ \t]+enter(?!\w)', lambda _: reserve('enter'), text, flags=re.I)
+    text = re.sub(r'[ \t]*(?:,[ \t]*)?(?<![\w/\\@-])enter(?!\w|[./\\@-]\w)(?:[ \t]*[,;:.!?])?[ \t]*',
+                  lambda _: reserve('\n'), text, flags=re.I)
+    return text, protected
+
+
+def _restore_text_commands(text, protected):
+    for token, value in protected.items():
+        text = text.replace(token, value)
+    return text
+
+
+def _model_quantization_name(path):
+    match = re.search(r'(?i)(?:^|[-_.])((?:i?q)[2-8](?:_[a-z0-9]+)*|bf16|f16|f32)(?=[-.]|$)', Path(path).name)
+    return match[1].upper() if match else 'unknown'
+
+
+def select_model_file(files, quant):
+    files = sorted(name for name in files if name.lower().endswith('.gguf'))
+    if not files:
+        raise ValueError('This repository has no GGUF files.')
+    if not quant:
+        # Any means a known low-memory quantization first, not an accidental F32.
+        for preferred in ('q4_k_m', 'q4_k', 'q5_k_m', 'q5_0', 'q8_0', 'f16'):
+            found = [name for name in files if _model_quantization_name(name).lower() == preferred]
+            if found:
+                return found[0]
+        return files[0]
+    choices = ('q4_k_m', 'q4_k') if quant == 'q4_k' else (quant,)
+    for choice in choices:
+        found = [name for name in files if _model_quantization_name(name).lower() == choice]
+        if found:
+            return found[0]
+    available = ', '.join(sorted({_model_quantization_name(name) for name in files}))
+    raise ValueError(f'{quant.upper()} is not available in this repository. Available: {available}. Choose another quantization.')
+
+
+def normalize_dictation_text(text, custom_symbols=None):
     """Explicit names remain supported; natural symbols require clear context."""
+    text, protected = _prepare_text_commands(text, custom_symbols)
     text = convert_spoken_numbers(expand_spoken_symbols(text))
 
     def money(match):
@@ -1784,7 +2001,7 @@ def normalize_dictation_text(text):
         if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}", domain):
             return match[0]
         return local + '@' + domain.lower()
-    return _EMAIL_SPOKEN.sub(email, text)
+    return _restore_text_commands(_EMAIL_SPOKEN.sub(email, text), protected)
 
 
 # Pre-transcribe a recording in the background, but never insert a preview.
@@ -1961,6 +2178,310 @@ class _ClipboardBridge(QObject):
 
 
 # ------------------------------------------------------------------- engine
+# Updates use only stable releases from this project's HTTPS GitHub endpoint.
+# The release digest AND its checksum manifest must agree; this is integrity
+# verification over TLS, not Authenticode or an independent signing authority.
+_UPDATE_REPOSITORY = 'Comet-Suite/dictate-desktop'
+_UPDATE_API = f'https://api.github.com/repos/{_UPDATE_REPOSITORY}/releases/latest'
+_UPDATE_MAX_BYTES = 512 * 1024 * 1024
+_UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{FCFDEEC6-10A9-41D4-9263-FEFD00F42E66}_is1'
+
+
+def _release_version(value):
+    match = re.fullmatch(r'v?(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})', str(value))
+    if not match:
+        raise ValueError('Only stable x.y.z release versions are supported.')
+    return tuple(map(int, match.groups()))
+
+
+def _approved_update_url(url, redirects=False):
+    from urllib.parse import urlsplit
+    parsed = urlsplit(str(url))
+    if (parsed.scheme != 'https' or parsed.username or parsed.password
+            or parsed.port not in (None, 443) or parsed.fragment):
+        raise ValueError('Update download did not use a trusted HTTPS URL.')
+    host = (parsed.hostname or '').lower()
+    if host == 'github.com' and parsed.path.startswith(f'/{_UPDATE_REPOSITORY}/releases/download/'):
+        return str(url)
+    if redirects and host in ('release-assets.githubusercontent.com', 'objects.githubusercontent.com',
+                              'github-releases.githubusercontent.com'):
+        return str(url)
+    raise ValueError('Update download is outside the official release repository.')
+
+
+def _update_open(url):
+    import urllib.request
+    if url != _UPDATE_API:
+        _approved_update_url(url)
+
+    class TrustedRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, response, code, message, headers, new_url):
+            _approved_update_url(new_url, redirects=True)
+            return super().redirect_request(request, response, code, message, headers, new_url)
+
+    request = urllib.request.Request(url, headers={
+        'User-Agent': f'Dictate/{VERSION}', 'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'})
+    response = urllib.request.build_opener(TrustedRedirect()).open(request, timeout=20)
+    final = response.geturl()
+    if url == _UPDATE_API:
+        if final != _UPDATE_API:
+            response.close()
+            raise ValueError('The release API redirected unexpectedly.')
+    else:
+        _approved_update_url(final, redirects=True)
+    return response
+
+
+def _update_json():
+    with _update_open(_UPDATE_API) as response:
+        raw = response.read(2 * 1024 * 1024 + 1)
+    if len(raw) > 2 * 1024 * 1024:
+        raise ValueError('The release metadata is too large.')
+    result = json.loads(raw.decode('utf-8'))
+    if not isinstance(result, dict):
+        raise ValueError('Invalid release metadata.')
+    return result
+
+
+def _update_candidate(release, current=VERSION):
+    if release.get('draft') or release.get('prerelease'):
+        return None
+    version_tuple = _release_version(release.get('tag_name', ''))
+    if version_tuple <= _release_version(current):
+        return None
+    version = '.'.join(map(str, version_tuple))
+    filename = f'Dictate-Setup-{version}-x64.exe'
+    selected = {}
+    for name in (filename, 'SHA256SUMS.txt'):
+        matches = [item for item in release.get('assets', []) if isinstance(item, dict) and item.get('name') == name]
+        if len(matches) != 1:
+            raise ValueError(f'The official release must contain exactly one {name}.')
+        asset = matches[0]
+        expected_url = f'https://github.com/{_UPDATE_REPOSITORY}/releases/download/{release["tag_name"]}/{name}'
+        if asset.get('browser_download_url') != expected_url:
+            raise ValueError('The release asset has an unexpected download URL.')
+        _approved_update_url(expected_url)
+        selected[name] = asset
+    installer = selected[filename]
+    size = installer.get('size')
+    if type(size) is not int or not 0 < size <= _UPDATE_MAX_BYTES:
+        raise ValueError('The installer size is invalid or exceeds the 512 MiB limit.')
+    digest = installer.get('digest', '')
+    if not isinstance(digest, str) or not re.fullmatch(r'sha256:[0-9a-fA-F]{64}', digest):
+        raise ValueError('The official release is missing its SHA-256 asset digest.')
+    return {'version': version, 'name': filename, 'size': size, 'sha256': digest[7:].lower(),
+            'url': installer['browser_download_url'],
+            'checksums_url': selected['SHA256SUMS.txt']['browser_download_url']}
+
+
+def _file_sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _manifest_checksum(text, filename):
+    matches = []
+    for line in text.lstrip('\ufeff').splitlines():
+        match = re.fullmatch(r'([0-9a-fA-F]{64})[ \t]+\*?([^\r\n]+)', line.strip())
+        if match and match[2] == filename:
+            matches.append(match[1].lower())
+    if len(matches) != 1:
+        raise ValueError('The installer is missing or duplicated in SHA256SUMS.txt.')
+    return matches[0]
+
+
+def _download_update(candidate, directory, cancelled=None, progress=None):
+    if cancelled is not None and cancelled.is_set():
+        raise InterruptedError('Update download cancelled.')
+    expected_name = f'Dictate-Setup-{candidate["version"]}-x64.exe'
+    if candidate['name'] != expected_name or not re.fullmatch(r'Dictate-Setup-[0-9]+\.[0-9]+\.[0-9]+-x64\.exe', expected_name):
+        raise ValueError('Unexpected update installer filename.')
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / candidate['name']
+    partial = target.with_suffix('.exe.partial')
+    with _update_open(candidate['checksums_url']) as response:
+        manifest = response.read(128 * 1024 + 1)
+    if len(manifest) > 128 * 1024:
+        raise ValueError('The checksum manifest is too large.')
+    expected = _manifest_checksum(manifest.decode('utf-8-sig'), candidate['name'])
+    if expected != candidate['sha256']:
+        raise ValueError('GitHub asset digest and checksum manifest disagree. Installation was blocked.')
+    if target.is_file() and target.stat().st_size == candidate['size'] and _file_sha256(target) == expected:
+        return target
+    try:
+        with _update_open(candidate['url']) as response, partial.open('wb') as output:
+            header = response.headers.get('Content-Length')
+            if header is not None and int(header) != candidate['size']:
+                raise ValueError('The download length does not match the release asset.')
+            downloaded, last_percent = 0, -1
+            while True:
+                if cancelled is not None and cancelled.is_set():
+                    raise InterruptedError('Update download cancelled.')
+                block = response.read(1024 * 1024)
+                if not block:
+                    break
+                downloaded += len(block)
+                if downloaded > candidate['size']:
+                    raise ValueError('The download exceeds the advertised installer size.')
+                output.write(block)
+                percent = downloaded * 100 // candidate['size']
+                if progress and percent != last_percent:
+                    last_percent = percent
+                    progress(percent)
+        if downloaded != candidate['size'] or _file_sha256(partial) != expected:
+            raise ValueError('Installer SHA-256/length verification failed. Installation was blocked.')
+        partial.replace(target)
+        return target
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def _installed_update_directory():
+    if os.name != 'nt':
+        raise RuntimeError('The built-in installer updater is available on Windows only.')
+    import winreg
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(root, _UNINSTALL_KEY, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                directory, _ = winreg.QueryValueEx(key, 'InstallLocation')
+            path = Path(directory).resolve()
+            if path.is_dir() and (path / 'Dictate.exe').is_file():
+                if any(part.casefold() == 'windowsapps' for part in path.parts):
+                    raise RuntimeError('Microsoft Store/WindowsApps installations must be updated through their store.')
+                return path
+        except FileNotFoundError:
+            continue
+    if getattr(sys, 'frozen', False):
+        path = Path(sys.executable).resolve().parent
+        if any(part.casefold() == 'windowsapps' for part in path.parts):
+            raise RuntimeError('Microsoft Store/WindowsApps installations must be updated through their store.')
+        if (path / 'Dictate.exe').is_file() and any(path.glob('unins*.exe')):
+            return path
+    raise RuntimeError('No installed Windows copy was found. Install the verified installer manually.')
+
+
+def _update_install_safe(engine):
+    return not (engine.recording or engine.pending or engine.busy or engine.loading or engine.speaking)
+
+
+def _launch_update_helper(candidate, installer, directory):
+    import shutil
+    if os.name != 'nt' or not getattr(sys, 'frozen', False):
+        raise RuntimeError('Automatic installation requires the packaged Windows app. Run the verified installer manually.')
+    installer, directory = Path(installer).resolve(), Path(directory).resolve()
+    if _release_version(candidate['version']) <= _release_version(VERSION):
+        raise ValueError('Same-version installs and downgrades are blocked.')
+    if (installer.name != f'Dictate-Setup-{candidate["version"]}-x64.exe'
+            or not re.fullmatch('[0-9a-f]{64}', candidate['sha256'])
+            or installer.stat().st_size != candidate['size'] or _file_sha256(installer) != candidate['sha256']):
+        raise ValueError('The downloaded installer changed. Installation was blocked.')
+    if not (directory / 'Dictate.exe').is_file() or any(part.casefold() == 'windowsapps' for part in directory.parts):
+        raise ValueError('The existing installation directory is not safe to upgrade.')
+    source = Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent)) / 'Dictate-Updater.exe'
+    if not source.is_file():
+        raise RuntimeError('The installer helper is missing. Reinstall Dictate or run the verified installer manually.')
+    launch_dir = APP_DIR / 'updates' / ('launch-' + os.urandom(12).hex())
+    launch_dir.mkdir(parents=True, exist_ok=False)
+    helper = launch_dir / source.name
+    shutil.copy2(source, helper)
+    # Native helper is outside the installed tree: no Python/Qt DLL locks survive
+    # app exit. It independently verifies SHA-256 and waits for THIS process only.
+    return subprocess.Popen([str(helper), str(os.getpid()), str(installer), str(directory), candidate['sha256']],
+                            cwd=str(launch_dir), close_fds=True,
+                            creationflags=0x00000008 | 0x00000200)
+
+
+class ReleaseUpdater(QObject):
+    status_changed = pyqtSignal(str)
+    download_ready = pyqtSignal()
+
+    def __init__(self, directory=None):
+        super().__init__()
+        self.directory = Path(directory) if directory is not None else APP_DIR / 'updates'
+        self.candidate, self.installer = None, None
+        self.busy, self.manual, self.status = False, False, 'Checks stable GitHub releases; asks before installing.'
+        self.deferred_version = ''
+        self._cancel = threading.Event()
+        self._closed = False
+        self._thread = None
+
+    def _status(self, text):
+        self.status = text
+        self.status_changed.emit(text)
+
+    def check(self, manual=False):
+        if self.busy or self._closed:
+            return
+        self.busy, self.manual = True, bool(manual)
+        self._cancel = threading.Event()
+        if manual:
+            self.deferred_version = ''
+        self._status('Checking official GitHub releases...')
+        self._thread = threading.Thread(target=self._check, args=(self._cancel,), daemon=True)
+        self._thread.start()
+
+    def _check(self, cancelled):
+        try:
+            candidate = _update_candidate(_update_json())
+            if cancelled.is_set():
+                return
+            if candidate is None:
+                self.candidate, self.installer = None, None
+                self._status(f'Dictate {VERSION} is up to date.')
+                return
+            self._status(f'Downloading {candidate["version"]} automatically...')
+            installer = _download_update(candidate, self.directory, cancelled,
+                                         lambda n: self._status(f'Downloading {candidate["version"]}: {n}%'))
+            if cancelled.is_set():
+                return
+            self.candidate, self.installer = candidate, installer
+            self._status(f'{candidate["version"]} verified and ready. Installation requires your confirmation.')
+            self.download_ready.emit()
+        except InterruptedError:
+            self._status('Update download cancelled.')
+        except Exception as exc:
+            self._status(f'Update check failed: {exc}')
+        finally:
+            self.busy = False
+
+    def cancel(self):
+        self._cancel.set()
+
+    def shutdown(self):
+        self._closed = True
+        self.cancel()
+
+
+_CUSTOM_SYMBOLS_TEMPLATE = '''# Dictate custom symbols: UTF-8, phrase = replacement
+# Blank lines and lines beginning with # are ignored. Longest phrase wins.
+# Replacements are literal; use \\n for a newline, \\t for a tab, \\\\ for a backslash.
+# JSON-quoted replacements preserve leading/trailing spaces.
+# Uncomment examples below, save, then click Reload (or just dictate again).
+# happy face = :)\n# work email = name@example.com\n# next paragraph = \\n\\n\n# my signature = "Best regards,\\nYour name"\n'''
+
+
+def _custom_symbols_file(settings):
+    configured = settings.get('custom_symbols_path', '')
+    if configured:
+        return Path(configured)
+    path = APP_DIR / 'custom_symbols.txt'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open('x', encoding='utf-8') as output:
+            output.write(_CUSTOM_SYMBOLS_TEMPLATE)
+    except FileExistsError:
+        pass
+    settings['custom_symbols_path'] = str(path)
+    save_settings(settings)
+    return path
+
+
 class Engine(QObject):
     model_ready = pyqtSignal()
     model_error = pyqtSignal(str)
@@ -1971,7 +2492,13 @@ class Engine(QObject):
     def __init__(self):
         super().__init__()
         self.model = None
+        self.model_info = {}
+        self.custom_symbols = CustomSymbols()
+        self._custom_error = ""
         self.loading = False
+        self._loading_model = None
+        self._loading_thread = None
+        self._unloading = False
         self.unloaded_idle = False
         self.auto_enter = False
         self.silence_blocks = 8
@@ -2063,77 +2590,135 @@ class Engine(QObject):
             return t.strip()
         return " ".join(str(getattr(s, "text", s)).strip() for s in res).strip()
 
+    def configure_custom_symbols(self, path):
+        self.custom_symbols.configure(path)
+        self._custom_error = ""
+
+    def _normalize_text(self, text):
+        result = normalize_dictation_text(text, self.custom_symbols)
+        if self.custom_symbols.error != self._custom_error:
+            self._custom_error = self.custom_symbols.error
+            if self._custom_error:
+                self.message.emit(self._custom_error)
+        return result
+
     def load_model(self, path):
-        if self.loading:
+        if self.loading or self._quit.is_set():
             return
         self.set_listening(False)
         with self._capture_lock:
             self._model_generation += 1
         self.loading = True
-        threading.Thread(target=self._load, args=(path,), daemon=True).start()
+        self._loading_thread = threading.Thread(target=self._load, args=(path,), daemon=True)
+        self._loading_thread.start()
 
-    def unload(self):
-        """Never unload in the middle of a recording or a committed message."""
-        with self._capture_lock:
-            if self.recording or self._pending_jobs or self.busy or self.loading:
-                return False
-        self.set_listening(False)
-        self.unloaded_idle = True
-        with self._capture_lock:
-            self._model_generation += 1
-        with self._lock:
-            old, self.model = self.model, None
+    @staticmethod
+    def _close_model(model, force=False):
+        if model is not None:
             try:
-                if old is not None:
-                    old.close()
+                if isinstance(model, _WindowsNativeSession):
+                    model.close(force=force)
+                else:
+                    model.close()
             except Exception:
                 pass
-        del old
-        gc.collect()
-        self.unloaded.emit()
-        return True
+
+    def _clear_audio_queues(self):
+        for pending in (self._audio_q, self._seg_q):
+            try:
+                while True:
+                    item = pending.get_nowait()
+                    if pending is self._seg_q and isinstance(item[2], _RecordingSession):
+                        item[2].cancelled = True
+                        item[2].parts.clear()
+            except queue.Empty:
+                pass
+        self._audio_q.put(("cancel", self._capture_id))
+
+    def unload(self):
+        """Manual and idle unload share the same no-recording/no-pending guard."""
+        with self._capture_lock:
+            if (self.recording or self.speaking or self._pending_jobs or self.busy or self.loading
+                    or self._unloading or self._quit.is_set()):
+                return False
+            self._unloading = True
+        try:
+            self.set_listening(False)
+            self.unloaded_idle = True
+            with self._capture_lock:
+                self._model_generation += 1
+                self._carry = np.zeros(0, dtype=np.float32)
+            with self._lock:
+                old, self.model = self.model, None
+                # An idle native worker has no result to preserve. Terminating
+                # it releases its entire address space, including allocator caches.
+                self._close_model(old, force=True)
+            self._clear_audio_queues()
+            del old
+            gc.collect()
+            self.unloaded.emit()
+            return True
+        finally:
+            self._unloading = False
 
     def _load(self, path):
+        model = None
         try:
+            if self._quit.is_set():
+                return
             p = Path(path)
             if p.is_dir():
                 found = sorted(p.glob("*.gguf"))
                 if not found:
                     raise FileNotFoundError("No .gguf file found in that folder.")
+                if len(found) > 1:
+                    raise ValueError("This folder contains several models. Select the exact .gguf file/quantization.")
                 p = found[0]
             if p.suffix.lower() != ".gguf" or not p.exists():
                 raise FileNotFoundError("Please select a .gguf model file.")
-            Session = self._import_engine(_gguf_runtime(p))
-
+            info = _gguf_info(p)
+            Session = self._import_engine(info["runtime"])
             with self._lock:
                 old, self.model = self.model, None
-            try:
-                if old is not None:
-                    old.close()
-            except Exception:
-                pass
+                self._close_model(old, force=True)
+            del old
             gc.collect()
-
+            if self._quit.is_set():
+                return
             threads = max(2, min(8, (os.cpu_count() or 4) - 2))
+            kwargs = {"n_threads": threads}
+            if isinstance(Session, functools.partial) and Session.func is _WindowsNativeSession:
+                kwargs["cancel_event"] = self._quit
             try:
-                model = Session(str(p), n_threads=threads)
+                model = Session(str(p), **kwargs)
             except TypeError:
                 model = Session(str(p))
+            self._loading_model = model
+            if self._quit.is_set():
+                return
             try:   # warm-up so the first real phrase is fast
                 self._run(model, np.zeros(SR, dtype=np.float32))
             except Exception:
                 pass
             with self._lock:
+                if self._quit.is_set():
+                    return
                 self.model = model
+                self.model_info = info
+                model = None  # ownership transferred to the engine
+                self._loading_model = None
             gc.collect()
             self.last_used = time.time()
             self.loading = False
             self.unloaded_idle = False
             self.model_ready.emit()
-        except Exception as e:
-            self.model = None
+        except Exception as exc:
+            if not self._quit.is_set():
+                self.model_error.emit(str(exc))
+        finally:
+            self._loading_model = None
+            self._close_model(model, force=self._quit.is_set())
             self.loading = False
-            self.model_error.emit(str(e))
 
     # ---- microphone
     def set_listening(self, on):
@@ -2180,9 +2765,11 @@ class Engine(QObject):
 
     def toggle_record(self):
         """Shortcut = start / COMMIT, regardless of the automatic-pause setting."""
-        if self.model is None:
+        if self.model is None or self.loading or self._unloading or self._quit.is_set():
             return None
         with self._capture_lock:
+            if self._unloading or self._quit.is_set():
+                return None
             self._shortcut_mode = True
             if self.recording:
                 # Flush even a partial audio block. All callback data already
@@ -2437,7 +3024,7 @@ class Engine(QObject):
                     if session.error is not None:
                         self.message.emit(f"Transcription error: {session.error}")
                         continue
-                    text = normalize_dictation_text(_join_transcript_parts(session.parts))
+                    text = self._normalize_text(_join_transcript_parts(session.parts))
                 else:
                     if session is not None and session.error is not None:
                         continue
@@ -2459,12 +3046,13 @@ class Engine(QObject):
                             part = self._run(model, audio.astype(np.float32, copy=False))
                             if part:
                                 parts.append(part)
+                            del audio
                     text = " ".join(parts).strip()
                     if kind == "stage":
                         if text and not session.cancelled and generation == self._model_generation:
                             session.parts.append((text, overlaps))
                         continue  # NEVER type or emit a preview
-                    text = normalize_dictation_text(text)
+                    text = self._normalize_text(text)
                 with self._capture_lock:
                     valid = (not self._quit.is_set() and generation == self._model_generation
                              and (kind == "finish" or
@@ -2482,6 +3070,9 @@ class Engine(QObject):
                 self.last_used = time.time()
                 if kind != "stage":
                     self._job_done()
+                if kind == "finish" and session is not None:
+                    session.parts.clear()
+                blocks = audio = model = parts = None  # do not pin the last NumPy chunk/model while idle
                 del payload
 
     def _type(self, text, generation=None):
@@ -2531,6 +3122,8 @@ class Engine(QObject):
                 return
             if not pasted:
                 # Accessibility/clipboard-restricted targets still have a fallback.
+                if "\n" in text or "\r" in text:
+                    raise RuntimeError("Multiline dictation needs clipboard access; no Enter key was sent.")
                 self._kb.type(text)
             if self.auto_enter and valid():
                 # Let asynchronous paste handlers finish before sending once.
@@ -2544,15 +3137,41 @@ class Engine(QObject):
             self.message.emit(f"Typing error: {exc}  (Python: {sys.executable})")
 
     def shutdown(self):
+        if self._quit.is_set():
+            return
         self._quit.set()
         with self._capture_lock:
             self._model_generation += 1
-            self.listening = self.recording = self.speaking = False
+            self.listening = self.recording = self.speaking = self.monitor = False
+            self._carry = np.zeros(0, dtype=np.float32)
+        stream, self._stream = self._stream, None
         try:
-            if self._stream is not None:
-                self._stream.close()
+            if stream is not None:
+                stream.close()
         except Exception:
             pass
+        model, self.model = self.model, None
+        loading = self._loading_model
+        # Windows model workers can be stopped even while native inference is
+        # blocked. Do not race close() against an in-process native call elsewhere.
+        for item in (model, loading):
+            if isinstance(item, _WindowsNativeSession):
+                self._close_model(item, force=True)
+        for worker in (self._segment_thread, self._transcribe_thread, self._loading_thread):
+            if worker is not None and worker is not threading.current_thread():
+                worker.join(.6)
+        def finish_close():
+            with self._lock:
+                if model is not None and not isinstance(model, _WindowsNativeSession):
+                    self._close_model(model)
+                # The loader owns an in-process warmup model until publication;
+                # its finally block closes it after warmup, never concurrently.
+                self._clear_audio_queues()
+        if self._transcribe_thread.is_alive():
+            threading.Thread(target=finish_close, daemon=True).start()
+        else:
+            finish_close()
+        gc.collect()
 
 
 # -------------------------------------------------------------------- toast
@@ -3253,6 +3872,8 @@ class SettingsDialog(QDialog):
     size_changed = pyqtSignal(str)
     dict_hotkey_changed = pyqtSignal(str)
     stop_mode_changed = pyqtSignal(str)
+    update_check_requested = pyqtSignal()
+    updates_changed = pyqtSignal(bool)
 
     def __init__(self, settings, engine):
         super().__init__(None, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
@@ -3435,11 +4056,35 @@ class SettingsDialog(QDialog):
         cl.addWidget(self.stopmode)
         self.speed.setEnabled(settings.get("stop_mode", "auto") != "manual")
         c2.addWidget(card)
+
+        card, cl = _card()
+        cl.addLayout(_text_block("Custom symbols (.txt)", "phrase = replacement. Saved edits reload on the next dictation. Say enter for a new line; literal enter for the word."))
+        self.symbol_path = QLineEdit(settings.get("custom_symbols_path", ""))
+        self.symbol_path.setReadOnly(True)
+        self.symbol_path.setPlaceholderText("Default custom_symbols.txt")
+        self.symbol_path.setToolTip(settings.get("custom_symbols_path", ""))
+        row = QHBoxLayout()
+        row.addWidget(self.symbol_path, 1)
+        button = QPushButton("Select...")
+        button.clicked.connect(self._pick_symbols)
+        row.addWidget(button)
+        cl.addLayout(row)
+        row = QHBoxLayout()
+        for text, callback in (("Edit", self._edit_symbols), ("Reload", self._reload_symbols)):
+            button = QPushButton(text)
+            button.clicked.connect(callback)
+            row.addWidget(button)
+        cl.addLayout(row)
+        self.symbol_status = QLabel("UTF-8 text; built-in symbols and numbers remain available.")
+        self.symbol_status.setObjectName("sub")
+        self.symbol_status.setWordWrap(True)
+        cl.addWidget(self.symbol_status)
+        c2.addWidget(card)
         c2.addStretch()
 
         # ================= column 3: model
         card, cl = _card()
-        cl.addLayout(_text_block("Speech model", "Any GGUF speech model (Parakeet, Canary, Whisper, ...)"))
+        cl.addLayout(_text_block("Speech model", "CrispASR or true Parakeet Unified GGUF. Quantizations depend on the native engine."))
         self.status = QLabel()
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
@@ -3448,7 +4093,7 @@ class SettingsDialog(QDialog):
         self.repo = QComboBox()
         self.repo.setEditable(True)
         self.repo.addItems(PRESET_REPOS)
-        self.repo.setToolTip("Hugging Face repo id of any GGUF speech model, e.g. user/model-GGUF")
+        self.repo.setToolTip("Hugging Face repo id for a supported CrispASR or transcribe.cpp speech model")
         self.combo = QComboBox()
         self.combo.addItems(list(QUANTS))
         cl.addWidget(self.repo)
@@ -3461,7 +4106,13 @@ class SettingsDialog(QDialog):
         i = self.unload.findData(settings.get("unload_min", 0))
         self.unload.setCurrentIndex(i if i >= 0 else 0)
         self.unload.currentIndexChanged.connect(self._unload)
-        cl.addWidget(self.unload)
+        row = QHBoxLayout()
+        row.addWidget(self.unload, 1)
+        self.btn_unload = QPushButton("Unload now")
+        self.btn_unload.setToolTip("Release model RAM now. Disabled while recording, transcribing, or loading.")
+        self.btn_unload.clicked.connect(self._unload_now)
+        row.addWidget(self.btn_unload)
+        cl.addLayout(row)
 
         cl.addLayout(_text_block("Download folder"))
         row = QHBoxLayout()
@@ -3500,6 +4151,22 @@ class SettingsDialog(QDialog):
         self.size.currentIndexChanged.connect(self._size)
         cl.addWidget(self.size)
         c3.addWidget(card)
+
+        card, cl = _card()
+        row = QHBoxLayout()
+        row.addLayout(_text_block("Release updates", "Download automatically; always ask before closing/installing."), 1)
+        self.updates_toggle = Switch(settings.get("check_updates", True))
+        self.updates_toggle.toggled.connect(self._updates)
+        row.addWidget(self.updates_toggle)
+        cl.addLayout(row)
+        self.update_status = QLabel("Checks stable GitHub releases; retains this folder and settings.")
+        self.update_status.setObjectName("sub")
+        self.update_status.setWordWrap(True)
+        cl.addWidget(self.update_status)
+        button = QPushButton("Check for updates")
+        button.clicked.connect(lambda: self.update_check_requested.emit())
+        cl.addWidget(button)
+        c3.addWidget(card)
         c3.addStretch()
 
         self.download_done.connect(self._dl_ok)
@@ -3531,10 +4198,11 @@ class SettingsDialog(QDialog):
 
     def _tick(self):
         e = self.engine
+        self.btn_unload.setEnabled(e.model is not None and _update_install_safe(e))
         lvl = e.level if e.active else e.mon_level
         self.meter.setValue(min(100, int(lvl * 22 * 100)))
         if e.model is None:
-            s = ("Model unloaded (idle) - click the mic in the pop-up to reload" if e.unloaded_idle
+            s = ("Model unloaded - click the mic in the pop-up to reload" if e.unloaded_idle
                  else "Load a speech model first (right side)")
         elif not e.listening:
             s = "Microphone is OFF - click the mic in the pop-up"
@@ -3610,9 +4278,12 @@ class SettingsDialog(QDialog):
         if extra:
             text = extra
         elif self.engine.model is not None:
-            text = f"Loaded: {name}"
+            info = self.engine.model_info
+            details = " / ".join(str(info[key])[:80] for key in ("architecture", "quantization") if info.get(key))
+            size = f" / {info['bytes'] / (1024 * 1024):.0f} MiB file" if info.get('bytes') else ''
+            text = f"Loaded: {name}" + (f"\n{details}{size}" if details or size else "")
         elif p and self.engine.unloaded_idle:
-            text = f"Unloaded (idle): {name} - click the mic to reload"
+            text = f"Unloaded: {name} - click the mic to reload"
         elif p:
             text = f"Selected: {name}"
         else:
@@ -3628,7 +4299,8 @@ class SettingsDialog(QDialog):
             color = "#8d8d98"
         self.status.setToolTip(p)
         self.status.setText(f"<span style='color:{color}; font-size:12pt;'>\u25cf</span>&nbsp; "
-                            f"{html.escape(text)}")
+                            f"{html.escape(text).replace(chr(10), '<br>')}")
+        self.btn_unload.setEnabled(self.engine.model is not None and _update_install_safe(self.engine))
 
     # ---- microphone
     def populate_mics(self):
@@ -3756,6 +4428,52 @@ class SettingsDialog(QDialog):
         save_settings(self.settings)
         self.size_changed.emit(key)
 
+    def _unload_now(self):
+        if self.engine.unload():
+            self.refresh_status()
+        else:
+            self.refresh_status("Finish recording/transcription before unloading the model.")
+
+    def _pick_symbols(self):
+        start = str(Path(self.settings.get('custom_symbols_path') or APP_DIR).parent)
+        path, _ = QFileDialog.getOpenFileName(self, "Select custom symbols", start, "UTF-8 text (*.txt)")
+        if path:
+            self._set_symbols(path)
+
+    def _set_symbols(self, path):
+        try:
+            self.engine.configure_custom_symbols(path)
+            self.settings['custom_symbols_path'] = str(Path(path).resolve())
+            save_settings(self.settings)
+            self.symbol_path.setText(self.settings['custom_symbols_path'])
+            self.symbol_path.setToolTip(self.settings['custom_symbols_path'])
+            self.symbol_status.setText(f"Loaded {len(self.engine.custom_symbols._values)} custom phrase(s). Edits reload automatically.")
+            return True
+        except (OSError, ValueError) as exc:
+            self.symbol_status.setText('Custom symbols: ' + str(exc) + ' Last valid mappings remain active.')
+            return False
+
+    def _reload_symbols(self):
+        try:
+            return self._set_symbols(_custom_symbols_file(self.settings))
+        except (OSError, ValueError) as exc:
+            self.symbol_status.setText('Custom symbols: ' + str(exc))
+            return False
+
+    def _edit_symbols(self):
+        if self._reload_symbols():
+            path = self.settings['custom_symbols_path']
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+                self.symbol_status.setText('Open this file in your text editor: ' + path)
+
+    def _updates(self, on):
+        self.settings['check_updates'] = bool(on)
+        save_settings(self.settings)
+        self.updates_changed.emit(bool(on))
+
+    def set_update_status(self, text):
+        self.update_status.setText(text)
+
     def _unload(self, i):
         self.settings["unload_min"] = int(self.unload.itemData(i) or 0)
         save_settings(self.settings)
@@ -3805,10 +4523,8 @@ class SettingsDialog(QDialog):
             try:
                 from huggingface_hub import hf_hub_download, list_repo_files
                 files = [f for f in list_repo_files(repo) if f.lower().endswith(".gguf")]
-                match = [f for f in files if quant in f.lower()] or files
-                if not match:
-                    raise RuntimeError(f"No .gguf files found in {repo}.")
-                out = hf_hub_download(repo, match[0], local_dir=str(dest / repo.split("/")[-1]))
+                selected = select_model_file(files, quant)
+                out = hf_hub_download(repo, selected, local_dir=str(dest / repo.split("/")[-1]))
                 self.download_done.emit(str(out))
             except Exception as e:
                 self.download_failed.emit(str(e))
@@ -3845,6 +4561,11 @@ class App:
         self._dictation_shortcut_registered = False
         self._shortcut_input_filter = _DictationShortcutFilter(self)
         self.engine = Engine()
+        custom_error = ""
+        try:
+            self.engine.configure_custom_symbols(_custom_symbols_file(self.settings))
+        except (OSError, ValueError) as exc:
+            custom_error = 'Custom symbols: ' + str(exc)
         self.engine.device_name = self.settings["mic"]
         self.engine.auto_enter = self.settings.get("auto_enter", False)
         self.engine.silence_blocks = int(self.settings.get("pause_blocks", 8))
@@ -3852,6 +4573,12 @@ class App:
         self.toast = Toast()
         self.dialog = None
         self._dictation_after_load = False
+        self._quitting = False
+        self._update_prompt_open = False
+        self.updater = ReleaseUpdater()
+        self.updater.status_changed.connect(self._update_status)
+        self.updater.download_ready.connect(self.consider_update)
+        self._last_update_check = time.monotonic()
 
         self.pill.move(self.preset_point(self.settings["position"]))
         self.pill.fade_in()
@@ -3875,8 +4602,14 @@ class App:
         a0.triggered.connect(self.toggle_popup)
         a1.triggered.connect(self.open_settings)
         a2.triggered.connect(self.quit)
-        for a in (a0, a1, a2):
+        unload_action = QAction("Unload model now", menu)
+        unload_action.triggered.connect(self.unload_model)
+        update_action = QAction("Check for updates", menu)
+        update_action.triggered.connect(lambda: self.check_updates(manual=True))
+        for a in (a0, a1, unload_action, update_action, a2):
             menu.addAction(a)
+        menu.aboutToShow.connect(lambda: unload_action.setEnabled(
+            self.engine.model is not None and _update_install_safe(self.engine)))
         self.tray.setContextMenu(menu)
         self._menu, self._acts = menu, (a0, a1, a2)
         self.tray.activated.connect(
@@ -3893,6 +4626,11 @@ class App:
         self.idle_timer = QTimer(interval=15000)
         self.idle_timer.timeout.connect(self.check_idle)
         self.idle_timer.start()
+        self.update_timer = QTimer(interval=3000)
+        self.update_timer.timeout.connect(self._update_tick)
+        self.update_timer.start()
+        if os.name == 'nt' and self.settings.get('check_updates', True):
+            QTimer.singleShot(8000, self.check_updates)
 
         path = self.settings["model_path"]
         if path and Path(path).exists():
@@ -3900,6 +4638,8 @@ class App:
             self.say("Loading model...")
         else:
             self.say("Open Settings to download or select a model")
+        if custom_error:
+            QTimer.singleShot(2500, lambda: self.say(custom_error, 6000))
         if not startup_ok:
             QTimer.singleShot(1500, lambda: self.say(
                 "Could not update Windows startup. Check Start on startup in Settings.", 6000))
@@ -4016,6 +4756,80 @@ class App:
                 and time.time() - e.last_used > mins * 60):
             e.unload()
 
+    def unload_model(self):
+        if not self.engine.unload():
+            self.say("Finish recording/transcription before unloading the model.", 3500)
+
+    def _update_status(self, text):
+        if self.dialog is not None:
+            self.dialog.set_update_status(text)
+        if self.updater.manual and text.startswith(('Update check failed', 'Dictate ')):
+            self.say(text, 5000)
+
+    def check_updates(self, manual=False):
+        if self._quitting or (not manual and not self.settings.get('check_updates', True)):
+            return
+        if os.name != 'nt':
+            self.updater._status('The installer updater is available in the Windows app.')
+            return
+        self._last_update_check = time.monotonic()
+        self.updater.check(manual=manual)
+
+    def set_updates_enabled(self, enabled):
+        if enabled:
+            self.check_updates()
+        elif not self.updater.manual:
+            self.updater.cancel()
+
+    def _update_tick(self):
+        if (os.name == 'nt' and self.settings.get('check_updates', True)
+                and time.monotonic() - self._last_update_check >= 6 * 60 * 60):
+            self.check_updates()
+        self.consider_update()
+
+    def consider_update(self):
+        updater, engine = self.updater, self.engine
+        candidate = updater.candidate
+        if (self._quitting or self._update_prompt_open or candidate is None
+                or candidate['version'] == updater.deferred_version
+                or not (self.settings.get('check_updates', True) or updater.manual)
+                or not _update_install_safe(engine) or self._dictation_after_load):
+            return
+        # A continuously-listening legacy auto session can start receiving speech
+        # without a shortcut. Require mic-off for that mode; manual Stop sessions
+        # may retain their harmless open input stream after the bulk insertion.
+        if engine.listening and not (engine.manual or engine._shortcut_mode):
+            return
+        self._update_prompt_open = True
+        try:
+            directory = _installed_update_directory()
+            question = QMessageBox(QMessageBox.Icon.Question, 'Dictate update ready',
+                f"Dictate {candidate['version']} has been downloaded and SHA-256 verified.\n\n"
+                f"Close Dictate, install into this existing folder, and restart?\n{directory}\n\n"
+                "Your settings, shortcuts, custom symbols, and downloaded models are retained.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self.dialog)
+            question.setTextFormat(Qt.TextFormat.PlainText)
+            question.setDefaultButton(QMessageBox.StandardButton.No)
+            question.button(QMessageBox.StandardButton.Yes).setText('Install and restart')
+            question.button(QMessageBox.StandardButton.No).setText('Later')
+            if question.exec() != QMessageBox.StandardButton.Yes:
+                updater.deferred_version = candidate['version']
+                return
+            # Modal dialogs process shortcut events: consent must not override a
+            # recording/transcription that started while the question was open.
+            if (not _update_install_safe(engine) or self._dictation_after_load
+                    or (engine.listening and not (engine.manual or engine._shortcut_mode))):
+                self.say('Update postponed until dictation is finished. Nothing was closed.', 5000)
+                return
+            _launch_update_helper(candidate, updater.installer, directory)
+            self.quit()
+        except Exception as exc:
+            updater.deferred_version = candidate['version']
+            updater._status('Update installation blocked: ' + str(exc))
+            self.say(updater.status, 6000)
+        finally:
+            self._update_prompt_open = False
+
     def on_unloaded(self):
         self.say("Model unloaded to free memory - click the mic to reload", 4000)
         if self.dialog:
@@ -4045,6 +4859,9 @@ class App:
             self.dialog.size_changed.connect(self.on_size)
             self.dialog.dict_hotkey_changed.connect(self.set_dict_hotkey)
             self.dialog.stop_mode_changed.connect(self.on_stop_mode)
+            self.dialog.update_check_requested.connect(lambda: self.check_updates(manual=True))
+            self.dialog.updates_changed.connect(self.set_updates_enabled)
+        self.dialog.set_update_status(self.updater.status)
         self.dialog.refresh_status()
         self.dialog.refresh_position()
         if not self.dialog.isVisible():
@@ -4056,6 +4873,14 @@ class App:
         self.dialog.activateWindow()
 
     def quit(self):
+        if self._quitting:
+            return
+        self._quitting = True
+        self.idle_timer.stop()
+        self.update_timer.stop()
+        self.updater.shutdown()
+        if self.dialog is not None:
+            self.dialog.tick.stop()
         self.engine.shutdown()
         self.hotkeys.stop()
         self.dict_hotkeys.stop()
@@ -4101,6 +4926,16 @@ def _packaging_smoke_test(arguments):
         assert normalize_dictation_text("five zero") == "50"
         assert normalize_dictation_text("twenty") == "20"
         assert normalize_dictation_text("zerozerofive") == "005"
+        assert normalize_dictation_text("hello enter world enter five zero") == "hello\nworld\n50"
+        report['spoken_enter'] = {'newlines_are_text': True, 'implicit_enter_key': False}
+        if getattr(sys, 'frozen', False):
+            helper = Path(sys._MEIPASS) / 'Dictate-Updater.exe'
+            assert helper.is_file(), 'Native update helper was not packaged'
+            with helper.open('rb') as stream:
+                assert stream.read(2) == b'MZ', 'Native update helper is not a Windows executable'
+            report['updater'] = {'helper_sha256': _file_sha256(helper),
+                                 'download_verification': 'GitHub digest + SHA256SUMS.txt',
+                                 'install_policy': 'confirmation_required'}
         long_digits = "005123456789" * 834
         long_words = " ".join(tuple(_SMALL_NUMBERS)[int(char)] for char in long_digits)
         assert normalize_dictation_text(long_words) == long_digits
@@ -4126,16 +4961,61 @@ def _packaging_smoke_test(arguments):
                 assert audio_file.getframerate() == SR and audio_file.getnchannels() == 1
                 assert audio_file.getsampwidth() == 2
                 pcm = np.frombuffer(audio_file.readframes(audio_file.getnframes()), "<i2").astype(np.float32) / 32768
+            def native_memory(process):
+                if os.name != 'nt' or process is None:
+                    return None
+                from ctypes import wintypes
+                class Counters(ctypes.Structure):
+                    _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD)] + [
+                        (name, ctypes.c_size_t) for name in ('PeakWorkingSetSize', 'WorkingSetSize',
+                        'QuotaPeakPagedPoolUsage', 'QuotaPagedPoolUsage', 'QuotaPeakNonPagedPoolUsage',
+                        'QuotaNonPagedPoolUsage', 'PagefileUsage', 'PeakPagefileUsage', 'PrivateUsage')]
+                kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel.OpenProcess.restype = wintypes.HANDLE
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                handle = kernel.OpenProcess(0x410, False, process.pid)
+                if not handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    counters = Counters()
+                    counters.cb = ctypes.sizeof(counters)
+                    psapi = ctypes.WinDLL('psapi', use_last_error=True)
+                    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+                    if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    return {'working_set_bytes': counters.WorkingSetSize, 'private_bytes': counters.PrivateUsage}
+                finally:
+                    kernel.CloseHandle(handle)
+
             for filename in options.model:
-                runtime = _gguf_runtime(filename)
-                stage("loading native model: " + runtime)
+                info = _gguf_info(filename)
+                runtime = info['runtime']
+                stage("loading native model: " + runtime + ' / ' + info['quantization'])
                 session_class = engine._import_engine(runtime)
                 session = session_class(str(filename), n_threads=4)
+                process = getattr(session, '_process', None)
+                result = {'runtime': runtime, 'metadata': info}
                 try:
                     stage("running inference: " + runtime)
                     text = engine._run(session, pcm)
                     assert "country" in text.lower(), text
-                    report["native_models"].append({"runtime": runtime, "transcript": text})
+                    result['transcript'] = text
+                    result['native_memory_before_unload'] = native_memory(process)
+                    # Exercise the actual manual/idle unload implementation, not
+                    # merely a direct adapter close; no audio/typing is pending.
+                    engine.model, engine.model_info = session, info
+                    started = time.monotonic()
+                    assert engine.unload(), 'Idle model unload was unexpectedly blocked'
+                    result['unload_seconds'] = round(time.monotonic() - started, 4)
+                    assert engine.model is None
+                    if process is not None:
+                        assert not process.is_alive(), 'Native model worker survived unloading'
+                        assert process.exitcode is not None
+                        result['worker_pid'] = process.pid
+                        result['worker_exited'] = True
+                        result['memory_released_by_process_exit'] = True
+                    report['native_models'].append(result)
                 finally:
                     session.close()
         report["status"] = "ok"

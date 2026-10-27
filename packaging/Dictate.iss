@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-3.0-only
 #ifndef AppVersion
-  #define AppVersion "1.2.0"
+  #define AppVersion "1.2.1"
 #endif
 #define AppName "Dictate"
 #define AppExeName "Dictate.exe"
@@ -14,6 +14,7 @@ AppPublisher=Comet-Suite
 AppPublisherURL=https://github.com/Comet-Suite/dictate-desktop
 AppSupportURL=https://github.com/Comet-Suite/dictate-desktop/issues
 AppUpdatesURL=https://github.com/Comet-Suite/dictate-desktop/releases
+UsePreviousAppDir=yes
 DefaultDirName={localappdata}\Programs\Dictate
 DefaultGroupName=Dictate
 AllowNoIcons=yes

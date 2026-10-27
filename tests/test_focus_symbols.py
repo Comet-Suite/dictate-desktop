@@ -117,7 +117,7 @@ def test_settings_columns_do_not_clip_long_model_or_mic_names(harness, width):
         top = control.mapTo(scroll.widget(), QPoint(0, 0))
         assert top.x() >= 0
         assert top.x() + control.width() <= scroll.widget().width()
-    assert len([w for w in d.findChildren(QFrame) if w.objectName() == 'card']) == 8
+    assert len([w for w in d.findChildren(QFrame) if w.objectName() == 'card']) == 10  # original 8 + requested mappings/updates controls
 
 
 def test_start_speak_pause_commit_preserves_focus_and_selection(harness):

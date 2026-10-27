@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.2.0",
+    [string]$Version = "1.2.1",
     [switch]$TestNativeModels,
     [switch]$TestInstaller
 )
@@ -7,6 +7,8 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be x.y.z" }
+$Declaration = 'APP_NAME, VERSION = "Dictate", "' + $Version + '"'
+if (-not (Get-Content "dictate.py" -Raw).Contains($Declaration)) { throw "Build version does not match the application source." }
 
 function Run-Command {
     param([string]$File, [string[]]$Arguments)
@@ -17,10 +19,10 @@ function Run-Smoke {
     param([string]$Exe, [string]$Report, [switch]$Native)
     $Arguments = "--packaging-smoke-test `"$Report`""
     if ($Native) {
-        $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --model `"$Root\.ci-models\unified.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
+        $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --model `"$Root\.ci-models\unified-q5_k_m.gguf`" --model `"$Root\.ci-models\tdt-q8_0.gguf`" --model `"$Root\.ci-models\unified.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
     }
     $Process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput "$Report.stdout.log" -RedirectStandardError "$Report.stderr.log"
-    if (-not $Process.WaitForExit(120000)) {
+    if (-not $Process.WaitForExit(240000)) {
         $Process.Kill()
         if (Test-Path $Report) { Get-Content $Report }
         if (Test-Path "$Report.startup.log") { Get-Content "$Report.startup.log" }
@@ -36,6 +38,8 @@ function Run-Smoke {
 }
 
 New-Item -ItemType Directory -Force release | Out-Null
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { throw "Run this build from an x64 Visual Studio C++ developer shell (cl.exe is required for the native update helper)." }
+Run-Command "cl.exe" @("/nologo", "/O2", "/MT", "/std:c++20", "/EHsc", "/DUNICODE", "/D_UNICODE", "/Forelease/Dictate-Updater.obj", "/Ferelease/Dictate-Updater.exe", "packaging/updater.cpp", "/link", "/SUBSYSTEM:WINDOWS", "/DYNAMICBASE", "/NXCOMPAT")
 Run-Command "python" @("tools/collect_licenses.py")
 Run-Command "python" @("-m", "PyInstaller", "--noconfirm", "--clean", "packaging/Dictate.spec")
 Run-Command "python" @("-m", "pip", "freeze")
@@ -64,13 +68,17 @@ if ($TestInstaller) {
     if (-not $Installer.WaitForExit(240000)) { $Installer.Kill(); throw "Installer timed out" }
     if ($Installer.ExitCode -ne 0) { throw "Installer failed: $($Installer.ExitCode)" }
     Run-Smoke -Exe "$InstallRoot\Dictate.exe" -Report "$Root\release\smoke-installed.json" -Native:$TestNativeModels
+    Run-Command "python" @("tools/check_windows_update.py", "--exe", "$InstallRoot\Dictate.exe", "--installer", $Setup, "--helper", "$Root\release\Dictate-Updater.exe", "--report", "$Root\release\smoke-windows-update.json")
     Run-Command "python" @("tools/check_windows_startup.py", "--exe", "$InstallRoot\Dictate.exe", "--installer", $Setup, "--report", "$Root\release\smoke-windows-startup.json")
     $InstalledReport = Get-Content "$Root\release\smoke-installed.json" -Raw | ConvertFrom-Json
     $StartupReport = Get-Content "$Root\release\smoke-windows-startup.json" -Raw | ConvertFrom-Json
     $InstalledReport | Add-Member -NotePropertyName windows_startup -NotePropertyValue $StartupReport
+    $UpdateReport = Get-Content "$Root\release\smoke-windows-update.json" -Raw | ConvertFrom-Json
+    $InstalledReport | Add-Member -NotePropertyName windows_update -NotePropertyValue $UpdateReport
     $InstalledReport | ConvertTo-Json -Depth 10 | Set-Content "$Root\release\smoke-installed.json" -Encoding utf8
 }
 
+Remove-Item "$Root\release\Dictate-Updater.exe", "$Root\release\Dictate-Updater.obj" -ErrorAction SilentlyContinue
 $Archive = "$Root\release\Dictate-$Version-Windows-x64.zip"
 if (Test-Path $Archive) { Remove-Item $Archive }
 Compress-Archive -Path "$Root\dist\Dictate" -DestinationPath $Archive -CompressionLevel Optimal

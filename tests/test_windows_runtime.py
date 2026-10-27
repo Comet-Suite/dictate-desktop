@@ -15,11 +15,20 @@ class Pipe:
     def __init__(self, replies=(), available=True):
         self.replies = deque(replies)
         self.sent = []
+        self.byte_packets = []
         self.available = available
         self.closed = False
 
     def send(self, message):
         self.sent.append(message)
+
+    def send_bytes(self, packet):
+        self.byte_packets.append(bytes(packet))
+
+    def recv_bytes(self, maxlength):
+        packet = self.replies.popleft()
+        assert len(packet) <= maxlength
+        return packet
 
     def recv(self):
         if not self.replies:
@@ -105,8 +114,8 @@ def test_proxy_returns_text_and_sends_contiguous_float32_audio(monkeypatch):
     session = m._WindowsNativeSession("model.gguf")
     audio = np.arange(20, dtype=np.float64)[::2]
     assert session.transcribe(audio) == "whole message"
-    command, payload = parent.sent[0]
-    assert command == "transcribe"
+    assert parent.sent[0] == ("transcribe", len(audio))
+    payload = np.frombuffer(parent.byte_packets[0], dtype=np.float32)
     assert payload.dtype == np.float32 and payload.flags.c_contiguous
     np.testing.assert_array_equal(payload, audio)
     assert process.started
@@ -143,7 +152,7 @@ def test_startup_timeout_cleans_up(monkeypatch):
     with pytest.raises(RuntimeError, match="did not respond"):
         m._WindowsNativeSession("model.gguf")
     assert parent.closed and process.terminated
-    assert process.joins == [2, 2]
+    assert process.joins == [2]  # timed-out worker is terminated before joining
 
 
 def test_dead_worker_is_reported_without_hanging(monkeypatch):

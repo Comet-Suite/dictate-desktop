@@ -1,47 +1,33 @@
-# Dictate 1.2.0 for Windows
+# Dictate 1.2.1 for Windows
 
-Offline dictation with smooth complete-message insertion, background transcription and natural symbols.
+Immediate model unloading, lower-retention audio handling, additional GGUF quantizations, editable custom symbols, spoken newlines and consent-based release updates.
 
 ## Downloads
 
-- **Dictate-Setup-1.2.0-x64.exe** — per-user Windows installer; Python is included.
-- **Dictate-1.2.0-Windows-x64.zip** — portable folder; extract everything before running `Dictate.exe`.
-- **SHA256SUMS.txt** — verify the downloaded files.
-- **Build and smoke-test reports** — exact dependencies and packaged native-runtime checks.
+- **Dictate-Setup-1.2.1-x64.exe** — per-user Windows x64 installer, including Python and both native speech runtimes.
+- **Dictate-1.2.1-Windows-x64.zip** — portable folder; extract the entire archive before launching.
+- **SHA256SUMS.txt** — verify installer/portable downloads.
+- **Smoke-test reports and resolved dependencies** — packaged, installed, native-runtime, memory-release, startup and in-place upgrade verification.
 
-## Included
+## What's new
 
-- Two configurable shortcuts: show/hide and start/commit dictation.
-- True Parakeet Unified and compatible CrispASR model support.
-- Background processing for long recordings without typing before you stop.
-- One full-text paste per recording; Auto Enter, if enabled, sends once.
-- Natural amounts such as “four hundred dollars” → `$400` and “400 rupees” → `₹400`.
-- The same supplied logo in the app, tray, installer, executable and taskbar shortcuts.
+- **Unload now:** release model RAM immediately from Settings or the tray when dictation/loading is finished. Existing Never/5/10/15-minute idle choices remain. Windows tears down the isolated native worker, including model weights and allocator caches; the next recording can reload the selected model.
+- **Memory efficiency:** float32 audio uses binary local IPC instead of pickled NumPy payloads. Native workers read the received byte buffer directly. Completed audio chunks/transcript buffers are released rather than retaining the last job while idle; shutdown also stops model workers.
+- **Better GGUF selection:** additional quantization choices, deterministic low-memory preference and clear errors instead of silently downloading an unavailable quantization's replacement. Architecture, detected quantization and file size are shown. CrispASR and Unified quantization metadata codes are interpreted separately. Native runtime/architecture compatibility is still required.
+- **Custom symbols from `.txt`:** select/edit/reload UTF-8 `phrase = replacement` mappings without rebuilding. Matching is case-insensitive and longest-first; replacements are literal, with escaped newlines and safe quoted text. Invalid edits retain the session's last good mappings.
+- **Spoken “enter”:** creates a newline inside the complete text, with following speech on the next line. It does **not** press Enter or send a message. Say “literal enter” for the word. Whole-session Stop-to-paste and the existing optional Auto Enter behavior remain separate.
+- **Release updater:** automatically checks/downloads strictly newer stable GitHub releases, verifies GitHub's SHA-256 digest against the checksum manifest and downloaded bytes, then **asks before closing/installing**. Active dictation, pending work and model loading defer installation. A native helper independently rechecks the installer, upgrades the existing installation folder, preserves preferences/model files and restarts. WindowsApps/Store paths are not overwritten.
 
-## Startup correction — replacement 1.2.0 build
+The existing layout/style, both shortcuts, true Parakeet Unified and CrispASR engines, 167 explicit symbols, natural currencies, exact numbers/leading zeros, bulk insertion, focus safeguards and Windows startup repair are retained.
 
-- Repairs a missing or outdated Windows startup entry from your saved **Start on startup** preference.
-- Creates the per-user Run key when needed and verifies the registered command.
-- Reinstalling or upgrading refreshes startup registration without resetting an enabled or disabled preference.
-- Correctly quotes the installed executable and removes its startup entry during uninstall.
-- Keeps the existing interface, two shortcuts, speech engines and dictation behavior unchanged.
+## Upgrade from 1.2.0
 
-This corrects the existing **1.2.0** release; it is not a separate version. Windows Startup apps must also allow Dictate to run.
+**1.2.0 has no updater: install 1.2.1 manually once.** Finish your current dictation, quit Dictate from the tray, run this installer and keep the existing folder. Saved shortcuts, startup preference, model selection, custom data and downloaded models are retained. Automatic update checks become available in 1.2.1 and can be turned off.
 
-## Number conversion — included in the same 1.2.0 update
+## Verification and trust
 
-- “twenty” → `20`, “five zero” → `50`, and “zerozerofive” / “zero zero five” → `005`.
-- Converts ordinary spoken cardinal numbers as well as digit-by-digit sequences.
-- Preserves leading zeros and long fractional digit strings without a fixed conversion-length cutoff.
-- Uses exact number handling rather than floating-point rounding; numeric quantities in prose are converted too.
-- Keeps explicit symbol commands, natural currencies, URLs/email addresses and one-paste-after-Stop behavior.
+The Windows pipeline exercises packaged/installed inference with Unified Q4_K_M/Q5_K_M and TDT Q4_K/Q8_0, worker exit/RAM release, both shortcut controls, startup registration, and a real hash-pinned 1.2.0-to-1.2.1 in-place installer handoff with preference/file preservation and restart. Unit tests separately cover text commands, mapping reload/errors, quantization selection, binary IPC, release validation, failed hashes and installation consent/recording guards. No physical reboot or microphone test is claimed.
 
-Download the replacement installer from this existing release. The application version remains **1.2.0**; both the startup correction and number conversion are included.
+The installer is **unsigned**; SmartScreen may warn. HTTPS and matching hashes provide integrity checks, not an Authenticode signature or an independent signing authority. Only install downloads you trust. Dictation audio remains local and is not uploaded by release checks. Model weights are downloaded separately and retain their own licenses.
 
-## Before you install
-
-Quit any running Dictate instance from its tray menu. The installer is unsigned, so Windows SmartScreen may warn. Check the SHA-256 values and only run downloads you trust.
-
-A speech model is downloaded separately in Settings. Existing preferences and model files are not deleted by the installer. Windows clipboard history/sync may retain dictated text according to your system settings.
-
-GPL-3.0 source is available in this tagged repository. Dependency source links and license notices are included in the package. Model weights retain their separate licenses.
+GPL-3.0 source, including the native helper, is available in this tagged repository. Bundled dependency notices/source links are included in the Windows package. See [custom-symbol documentation](docs/CUSTOM_SYMBOLS.md) and [update policy/security details](docs/UPDATES.md).
