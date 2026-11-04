@@ -80,11 +80,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &count);
     if (!argv) return 2;
     const bool quiet = count == 6 && std::wstring(argv[5]) == L"--quiet";
-    auto error = [quiet](int code, const wchar_t* text) {
-        if (!quiet) MessageBoxW(nullptr, text, L"Dictate update", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    const bool verify_progress = count == 6 && std::wstring(argv[5]) == L"--verify-progress";
+    const bool suppress_errors = quiet || verify_progress;
+    auto error = [suppress_errors](int code, const wchar_t* text) {
+        if (!suppress_errors) MessageBoxW(nullptr, text, L"Dictate update", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
         return code;
     };
-    if ((count != 5 && !quiet) || count < 5) {
+    if ((count != 5 && !quiet && !verify_progress) || count < 5) {
         LocalFree(argv);
         return error(2, L"The updater received invalid arguments. Your installation was not changed.");
     }
@@ -128,7 +130,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     std::wstring helper_directory(helper_path, helper_length);
     helper_directory = helper_directory.substr(0, helper_directory.find_last_of(L"\\/"));
     PROCESS_INFORMATION install = {};
-    const std::wstring arguments = L"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /NOICONS "
+    // Production shows Inno's real file-install progress. Quiet CI remains non-interactive.
+    const std::wstring arguments = (quiet ? L"/VERYSILENT " : L"/SILENT ") +
+        std::wstring(L"/SUPPRESSMSGBOXES /NORESTART /NOCANCEL /NOICONS ") +
         L"/NOCLOSEAPPLICATIONS /NORESTARTAPPLICATIONS " + quote(L"/DIR=" + directory) + L" " +
         quote(L"/LOG=" + helper_directory + L"\\installer.log");
     if (!start(setup, arguments, directory, install))

@@ -14,6 +14,12 @@ FILES = [
      'f9def6f9b4e83ab7d006df3e1b676dfa1f973a3b6da232a9c99fcaa66bcd2836'),
     ('tdt-q8_0.gguf', 'https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/dff69b0e675921ffd5a6133f5fbe2aac690d3ec3/parakeet-tdt-0.6b-v3-q8_0.gguf?download=true',
      '300de963db10e991a8c3c1674000245546f2e99d396f860aecbde2dd0534e43f'),
+    ('orukeet.gguf', 'https://huggingface.co/cstr/orukeet-GGUF/resolve/2a93474c2771a6ca2228a7e001bd06ce0c97f880/orukeet-q4_k.gguf?download=true',
+     '769f346e3960de76afabcb82670b9d0d78c91051bc030be82e77eac45a7075be'),
+    ('phonon2.gguf', 'https://huggingface.co/cstr/phonon2-GGUF/resolve/3ed3e6ad6e7ce63affffeede37328ff756efaa2f/phonon2-q4_k.gguf?download=true',
+     'c8a55e1009da474f9ae96b1500a6901e739e862cc7b1c3923251bc37e72b16db'),
+    ('redux.gguf', 'https://huggingface.co/cstr/parakeet-redux-GGUF/resolve/3f288b7fb33caff80f1424bd5ea1cecaf9808209/parakeet-redux-q4_k.gguf?download=true',
+     'c07c7a0c76aa573334df88afc3a0c3bed45f90a35f09c22979e811078be30e6d'),
     ('jfk.wav', 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav',
      '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e'),
 ]
@@ -33,7 +39,7 @@ def main():
         target = directory / name
         if not target.exists() or digest(target) != expected:
             print('Downloading', name, flush=True)
-            request = urllib.request.Request(url, headers={'User-Agent': 'Dictate-Packaging/1.2.2'})
+            request = urllib.request.Request(url, headers={'User-Agent': 'Dictate-Packaging/1.2.3'})
             temporary = target.with_suffix('.partial')
             with urllib.request.urlopen(request, timeout=120) as response, temporary.open('wb') as output:
                 while block := response.read(2 * 1024 * 1024):

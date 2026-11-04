@@ -8,13 +8,16 @@ on:
       tag:
         description: Existing version tag to build
         required: true
-        default: v1.2.2
+        default: v1.2.3
 
 permissions:
   contents: write
 
 jobs:
+  regression:
+    uses: ./.github/workflows/tests.yml
   build:
+    needs: regression
     name: Build and verify Windows installer
     runs-on: windows-latest
     timeout-minutes: 40

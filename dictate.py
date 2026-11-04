@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Comet-Suite
 # Distributed under GPL-3.0; see LICENSE. No warranty.
 """
-Dictate 1.2.2  -  system-wide offline dictation
+Dictate 1.2.3  -  system-wide offline dictation
 PyQt6 UI + NVIDIA Parakeet Unified / TDT GGUF (local CPU runtimes)
 
 Install:
@@ -102,22 +102,96 @@ from PyQt6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QKeySequence, 
                          QDesktopServices, QPixmap, QPolygonF, QTextCursor)
 from PyQt6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
                              QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QMenu, QPlainTextEdit,
-                             QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget)
+                             QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget)
 
-APP_NAME, VERSION = "Dictate", "1.2.2"
+APP_NAME, VERSION = "Dictate", "1.2.3"
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 SETTINGS_FILE = APP_DIR / "settings.json"
 DEFAULTS = {"dark_mode": True, "start_on_startup": False, "model_path": "",
             "position": "bottom_center", "pos": None, "hotkey": "Ctrl+Alt+D",
-            "mic": "", "download_dir": str(APP_DIR / "models"), "unload_min": 0, "size": "medium", "auto_enter": False, "pause_blocks": 8, "stop_mode": "auto", "dict_hotkey": "Ctrl+Alt+Space", "custom_symbols_path": "", "check_updates": True}
+            "mic": "", "download_dir": str(APP_DIR / "models"), "unload_min": 0, "size": "medium", "auto_enter": False, "pause_blocks": 8, "stop_mode": "auto", "dict_hotkey": "Ctrl+Alt+Space", "custom_symbols_path": "", "check_updates": True,
+            "unload_after_paste": True, "preload_on_popup": True}
 
-PRESET_REPOS = ["cstr/parakeet-tdt-0.6b-v3-GGUF", "cstr/orukeet-GGUF", "cstr/phonon2-GGUF",
-                "cstr/parakeet-redux-GGUF",
-                "handy-computer/parakeet-unified-en-0.6b-gguf"]
+# Curated, revision-pinned catalog; available formats are not all release-tested.
+MODEL_CATALOG = ({'name': 'Parakeet Unified English 0.6B',
+  'repo': 'handy-computer/parakeet-unified-en-0.6b-gguf',
+  'revision': '843b1b175ace04f5a89d379c79e2518c0d065b25',
+  'languages': 'English',
+  'engine': 'transcribe.cpp',
+  'decoder': 'RNN-T',
+  'description': 'True NVIDIA Unified English. This is not the similarly named TDT conversion.',
+  'license': 'NVIDIA Open Model License',
+  'default_quant': 'Q4_K_M',
+  'release_checks': ['Q4_K_M', 'Q5_K_M'],
+  'files': [{'quant': 'Q4_K_M', 'filename': 'parakeet-unified-en-0.6b-Q4_K_M.gguf', 'bytes': 477274496},
+            {'quant': 'Q5_K_M', 'filename': 'parakeet-unified-en-0.6b-Q5_K_M.gguf', 'bytes': 540795264},
+            {'quant': 'Q6_K', 'filename': 'parakeet-unified-en-0.6b-Q6_K.gguf', 'bytes': 602191232},
+            {'quant': 'Q8_0', 'filename': 'parakeet-unified-en-0.6b-Q8_0.gguf', 'bytes': 731357568},
+            {'quant': 'F16', 'filename': 'parakeet-unified-en-0.6b-F16.gguf', 'bytes': 1239114240},
+            {'quant': 'F32', 'filename': 'parakeet-unified-en-0.6b-F32.gguf', 'bytes': 2473323520}]},
+ {'name': 'Parakeet TDT 0.6B v3',
+  'repo': 'cstr/parakeet-tdt-0.6b-v3-GGUF',
+  'revision': 'dff69b0e675921ffd5a6133f5fbe2aac690d3ec3',
+  'languages': '25 European languages, including English',
+  'engine': 'CrispASR',
+  'decoder': 'TDT',
+  'description': 'NVIDIA multilingual Parakeet v3. Automatic speech-language recognition; English text '
+                 'commands are unchanged.',
+  'license': 'CC-BY-4.0',
+  'default_quant': 'Q4_K',
+  'release_checks': ['Q4_K', 'Q8_0'],
+  'files': [{'quant': 'Q4_K', 'filename': 'parakeet-tdt-0.6b-v3-q4_k.gguf', 'bytes': 417894912},
+            {'quant': 'Q5_0', 'filename': 'parakeet-tdt-0.6b-v3-q5_0.gguf', 'bytes': 470255392},
+            {'quant': 'Q8_0', 'filename': 'parakeet-tdt-0.6b-v3-q8_0.gguf', 'bytes': 674342336},
+            {'quant': 'F16', 'filename': 'parakeet-tdt-0.6b-v3.gguf', 'bytes': 1255338816}]},
+ {'name': 'Orukeet',
+  'repo': 'cstr/orukeet-GGUF',
+  'revision': '2a93474c2771a6ca2228a7e001bd06ce0c97f880',
+  'languages': '25 European languages, including English',
+  'engine': 'CrispASR',
+  'decoder': 'TDT',
+  'description': 'Multilingual Parakeet-family derivative. Read the model card for language and accuracy '
+                 'details.',
+  'license': 'CC-BY-SA-4.0',
+  'default_quant': 'Q4_K',
+  'release_checks': ['Q4_K'],
+  'files': [{'quant': 'Q4_K', 'filename': 'orukeet-q4_k.gguf', 'bytes': 402226496},
+            {'quant': 'Q5_0', 'filename': 'orukeet-q5_0.gguf', 'bytes': 470255456},
+            {'quant': 'Q8_0', 'filename': 'orukeet-q8_0.gguf', 'bytes': 674342400},
+            {'quant': 'F16', 'filename': 'orukeet-f16.gguf', 'bytes': 1255338880}]},
+ {'name': 'Phonon-2',
+  'repo': 'cstr/phonon2-GGUF',
+  'revision': '3ed3e6ad6e7ce63affffeede37328ff756efaa2f',
+  'languages': 'English',
+  'engine': 'CrispASR',
+  'decoder': 'TDT',
+  'description': 'English Parakeet-family derivative. Standard GGUF weights, not the small custom upstream '
+                 'transport.',
+  'license': 'CC-BY-4.0',
+  'default_quant': 'Q4_K',
+  'release_checks': ['Q4_K'],
+  'files': [{'quant': 'Q4_K', 'filename': 'phonon2-q4_k.gguf', 'bytes': 402226656},
+            {'quant': 'Q8_0', 'filename': 'phonon2-q8_0.gguf', 'bytes': 674342560},
+            {'quant': 'F16', 'filename': 'phonon2-f16.gguf', 'bytes': 1255339232}]},
+ {'name': 'Parakeet Redux',
+  'repo': 'cstr/parakeet-redux-GGUF',
+  'revision': '3f288b7fb33caff80f1424bd5ea1cecaf9808209',
+  'languages': 'Multilingual; see model card',
+  'engine': 'CrispASR',
+  'decoder': 'TDT',
+  'description': 'Parakeet v3 architecture with converted ternary-trained weights. GGUF file size is not '
+                 'runtime RAM.',
+  'license': 'CC-BY-4.0',
+  'default_quant': 'Q4_K',
+  'release_checks': ['Q4_K'],
+  'files': [{'quant': 'Q4_K', 'filename': 'parakeet-redux-q4_k.gguf', 'bytes': 402226496},
+            {'quant': 'Q8_0', 'filename': 'parakeet-redux-q8_0.gguf', 'bytes': 674342400},
+            {'quant': 'F16', 'filename': 'parakeet-redux-f16.gguf', 'bytes': 1255338880}]})
+PRESET_REPOS = [model["repo"] for model in MODEL_CATALOG]
 QUANTS = {"Q4_K  -  low memory / recommended": "q4_k", "Q4_K_M": "q4_k_m", "Q4_K_S": "q4_k_s",
           "Q5_K_M": "q5_k_m", "Q5_K_S": "q5_k_s", "Q5_0": "q5_0", "Q6_K": "q6_k",
           "Q8_0  -  higher precision": "q8_0", "F16  -  unquantized (large)": "f16",
-          "Any  -  prefer low memory": ""}
+          "F32  -  full precision (very large)": "f32", "Any  -  prefer low memory": ""}
 
 SR, BLOCK = 16000, 512                 # 16 kHz, 32 ms blocks
 SILENCE_BLOCKS = 22                    # ~0.7 s of silence ends a phrase
@@ -1750,6 +1824,36 @@ def select_model_file(files, quant):
     raise ValueError(f'{quant.upper()} is not available in this repository. Available: {available}. Choose another quantization.')
 
 
+def _catalog_model(repo):
+    if not isinstance(repo, str):
+        return None
+    return next((model for model in MODEL_CATALOG if model['repo'] == repo.strip()), None)
+
+
+def _catalog_download_file(repo, files, quant):
+    model = _catalog_model(repo)
+    if model is None:
+        return select_model_file(files, quant)
+    requested = (quant or model['default_quant']).upper()
+    if requested == 'Q4_K' and model['default_quant'] == 'Q4_K_M':
+        requested = 'Q4_K_M'  # retain the original low-memory Unified alias
+    variant = next((item for item in model['files'] if item['quant'] == requested), None)
+    if variant is None or variant['filename'] not in files:
+        available = ', '.join(item['quant'] for item in model['files'])
+        raise ValueError(f'{requested} is not available for {model["name"]}. Available: {available}.')
+    return variant['filename']
+
+
+def _catalog_for_path(path):
+    filename = Path(path).name.lower()
+    for prefix, repo in (('parakeet-unified', PRESET_REPOS[0]), ('parakeet-tdt', PRESET_REPOS[1]),
+                         ('orukeet', PRESET_REPOS[2]), ('phonon2', PRESET_REPOS[3]),
+                         ('parakeet-redux', PRESET_REPOS[4])):
+        if filename.startswith(prefix):
+            return repo
+    return ''
+
+
 def normalize_dictation_text(text, custom_symbols=None):
     """Explicit names remain supported; natural symbols require clear context."""
     text, protected = _prepare_text_commands(text, custom_symbols)
@@ -2113,9 +2217,33 @@ def _manifest_checksum(text, filename):
     return matches[0]
 
 
-def _download_update(candidate, directory, cancelled=None, progress=None):
-    if cancelled is not None and cancelled.is_set():
-        raise InterruptedError('Update download cancelled.')
+def _download_update(candidate, directory, cancelled=None, progress=None, details=None):
+    """Stream and rehash on a worker; percentages never mean install consent."""
+    import hashlib
+
+    def check_cancelled():
+        if cancelled is not None and cancelled.is_set():
+            raise InterruptedError('Update download cancelled.')
+
+    def report(phase, percent=None, received=0, speed=0.0):
+        check_cancelled()
+        if details is not None:
+            details({'phase': phase, 'percent': percent, 'received': received,
+                     'total': candidate['size'], 'speed': speed,
+                     'eta': max(0.0, (candidate['size'] - received) / speed) if speed > 0 else None})
+
+    def verified_hash(path):
+        digest, read = hashlib.sha256(), 0
+        with Path(path).open('rb') as source:
+            while block := source.read(1024 * 1024):
+                check_cancelled()
+                digest.update(block)
+                read += len(block)
+                report('verifying', min(100, read * 100 // candidate['size']))
+        check_cancelled()
+        return digest.hexdigest()
+
+    check_cancelled()
     expected_name = f'Dictate-Setup-{candidate["version"]}-x64.exe'
     if candidate['name'] != expected_name or not re.fullmatch(r'Dictate-Setup-[0-9]+\.[0-9]+\.[0-9]+-x64\.exe', expected_name):
         raise ValueError('Unexpected update installer filename.')
@@ -2123,41 +2251,51 @@ def _download_update(candidate, directory, cancelled=None, progress=None):
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / candidate['name']
     partial = target.with_suffix('.exe.partial')
-    with _update_open(candidate['checksums_url']) as response:
-        manifest = response.read(128 * 1024 + 1)
-    if len(manifest) > 128 * 1024:
-        raise ValueError('The checksum manifest is too large.')
-    expected = _manifest_checksum(manifest.decode('utf-8-sig'), candidate['name'])
-    if expected != candidate['sha256']:
-        raise ValueError('GitHub asset digest and checksum manifest disagree. Installation was blocked.')
-    if target.is_file() and target.stat().st_size == candidate['size'] and _file_sha256(target) == expected:
-        return target
     try:
+        report('checking')
+        with _update_open(candidate['checksums_url']) as response:
+            manifest = response.read(128 * 1024 + 1)
+        check_cancelled()
+        if len(manifest) > 128 * 1024:
+            raise ValueError('The checksum manifest is too large.')
+        expected = _manifest_checksum(manifest.decode('utf-8-sig'), candidate['name'])
+        if expected != candidate['sha256']:
+            raise ValueError('GitHub asset digest and checksum manifest disagree. Installation was blocked.')
+        if target.is_file() and target.stat().st_size == candidate['size'] and verified_hash(target) == expected:
+            if progress is not None:
+                progress(100)
+            return target
+        report('downloading', 0)
         with _update_open(candidate['url']) as response, partial.open('wb') as output:
             header = response.headers.get('Content-Length')
             if header is not None and int(header) != candidate['size']:
                 raise ValueError('The download length does not match the release asset.')
             downloaded, last_percent = 0, -1
+            started, last_report = time.monotonic(), 0.0
             while True:
-                if cancelled is not None and cancelled.is_set():
-                    raise InterruptedError('Update download cancelled.')
-                block = response.read(1024 * 1024)
+                check_cancelled()
+                block = response.read(256 * 1024)
                 if not block:
                     break
                 downloaded += len(block)
                 if downloaded > candidate['size']:
                     raise ValueError('The download exceeds the advertised installer size.')
                 output.write(block)
-                percent = downloaded * 100 // candidate['size']
-                if progress and percent != last_percent:
-                    last_percent = percent
+                percent, now = downloaded * 100 // candidate['size'], time.monotonic()
+                if progress is not None and percent != last_percent:
                     progress(percent)
-        if downloaded != candidate['size'] or _file_sha256(partial) != expected:
+                if percent != last_percent or now - last_report >= .15:
+                    report('downloading', percent, downloaded, downloaded / max(.001, now - started))
+                    last_report = now
+                last_percent = percent
+        if downloaded != candidate['size'] or verified_hash(partial) != expected:
             raise ValueError('Installer SHA-256/length verification failed. Installation was blocked.')
+        check_cancelled()
         partial.replace(target)
         return target
     finally:
         partial.unlink(missing_ok=True)
+
 
 
 def _installed_update_directory():
@@ -2185,7 +2323,8 @@ def _installed_update_directory():
 
 
 def _update_install_safe(engine):
-    return not (engine.recording or engine.pending or engine.busy or engine.loading or engine.speaking)
+    return not (engine.recording or engine.pending or engine.busy or engine.loading or engine.speaking
+                or getattr(engine, '_unloading', False))
 
 
 def _launch_update_helper(candidate, installer, directory):
@@ -2217,13 +2356,17 @@ def _launch_update_helper(candidate, installer, directory):
 
 class ReleaseUpdater(QObject):
     status_changed = pyqtSignal(str)
+    progress_changed = pyqtSignal(object)
     download_ready = pyqtSignal()
 
     def __init__(self, directory=None):
         super().__init__()
         self.directory = Path(directory) if directory is not None else APP_DIR / 'updates'
         self.candidate, self.installer = None, None
-        self.busy, self.manual, self.status = False, False, 'Checks stable GitHub releases; asks before installing.'
+        self.busy, self.manual = False, False
+        self.status = 'Checks stable GitHub releases; asks before installing.'
+        self.state = {'phase': 'idle', 'percent': None, 'status': self.status}
+        self._state_lock = threading.RLock()
         self.deferred_version = ''
         self._cancel = threading.Event()
         self._closed = False
@@ -2231,45 +2374,79 @@ class ReleaseUpdater(QObject):
 
     def _status(self, text):
         self.status = text
-        self.status_changed.emit(text)
+        if not self._closed:
+            self.status_changed.emit(text)
+
+    def _publish(self, phase, text, **values):
+        self.state = {'phase': phase, 'percent': None, 'status': text, **values}
+        self._status(text)
+        if not self._closed:
+            self.progress_changed.emit(dict(self.state))
 
     def check(self, manual=False):
         if self.busy or self._closed:
-            return
+            return False
         self.busy, self.manual = True, bool(manual)
+        self.candidate, self.installer = None, None
         self._cancel = threading.Event()
         if manual:
             self.deferred_version = ''
-        self._status('Checking official GitHub releases...')
+        self._publish('checking', 'Checking official GitHub releases...')
         self._thread = threading.Thread(target=self._check, args=(self._cancel,), daemon=True)
         self._thread.start()
+        return True
 
     def _check(self, cancelled):
         try:
             candidate = _update_candidate(_update_json())
             if cancelled.is_set():
-                return
+                raise InterruptedError()
             if candidate is None:
-                self.candidate, self.installer = None, None
-                self._status(f'Dictate {VERSION} is up to date.')
+                self._publish('current', f'Dictate {VERSION} is up to date.')
                 return
-            self._status(f'Downloading {candidate["version"]} automatically...')
-            installer = _download_update(candidate, self.directory, cancelled,
-                                         lambda n: self._status(f'Downloading {candidate["version"]}: {n}%'))
+
+            def details(state):
+                phase, percent = state.pop('phase'), state.pop('percent')
+                title = {'checking': 'Checking release checksums', 'downloading': 'Downloading',
+                         'verifying': 'Verifying SHA-256'}[phase]
+                text = f'{title} {candidate["version"]}' + (f': {percent}%' if percent is not None else '...')
+                self._publish(phase, text, version=candidate['version'], **dict(state, percent=percent))
+
+            installer = _download_update(candidate, self.directory, cancelled, details=details)
             if cancelled.is_set():
-                return
-            self.candidate, self.installer = candidate, installer
-            self._status(f'{candidate["version"]} verified and ready. Installation requires your confirmation.')
-            self.download_ready.emit()
+                raise InterruptedError()
+            with self._state_lock:
+                if cancelled.is_set() or self._closed:
+                    raise InterruptedError()
+                self.candidate, self.installer = candidate, installer
+                self._publish('ready', f'{candidate["version"]} verified and ready. Installation requires your confirmation.',
+                              version=candidate['version'], percent=100, total=candidate['size'])
+                if cancelled.is_set():
+                    raise InterruptedError()
+                self.download_ready.emit()
         except InterruptedError:
-            self._status('Update download cancelled.')
+            self.candidate, self.installer = None, None
+            self._publish('cancelled', 'Update download cancelled. Offline dictation is unaffected.')
         except Exception as exc:
-            self._status(f'Update check failed: {exc}')
+            self.candidate, self.installer = None, None
+            self._publish('error', f'Update check failed: {exc}')
         finally:
-            self.busy = False
+            with self._state_lock:
+                self.busy = False
+                if cancelled.is_set():
+                    self.candidate, self.installer = None, None
+                    if not self._closed and self.state['phase'] != 'cancelled':
+                        self._publish('cancelled', 'Update download cancelled. Offline dictation is unaffected.')
 
     def cancel(self):
-        self._cancel.set()
+        with self._state_lock:
+            self._cancel.set()
+            offered = self.candidate is not None
+            self.candidate, self.installer = None, None
+            if not self._closed and (self.busy or offered):
+                phase = 'cancelling' if self.busy else 'cancelled'
+                self._publish(phase, 'Cancelling download… the current network request may finish first.'
+                              if self.busy else 'Update download cancelled. Offline dictation is unaffected.')
 
     def shutdown(self):
         self._closed = True
@@ -2318,6 +2495,8 @@ class Engine(QObject):
         self._loading_thread = None
         self._unloading = False
         self.unloaded_idle = False
+        self.unload_reason = ""
+        self.unload_after_paste = False  # configured from persistent application preferences
         self.auto_enter = False
         self.silence_blocks = 8
         self.manual = False          # manual mode: record until the shortcut is pressed again
@@ -2421,14 +2600,15 @@ class Engine(QObject):
         return result
 
     def load_model(self, path):
-        if self.loading or self._quit.is_set():
-            return
-        self.set_listening(False)
         with self._capture_lock:
+            if self.loading or self._unloading or self._quit.is_set():
+                return False
+            self.loading = True
             self._model_generation += 1
-        self.loading = True
+        self.set_listening(False)
         self._loading_thread = threading.Thread(target=self._load, args=(path,), daemon=True)
         self._loading_thread.start()
+        return True
 
     @staticmethod
     def _close_model(model, force=False):
@@ -2453,31 +2633,31 @@ class Engine(QObject):
                 pass
         self._audio_q.put(("cancel", self._capture_id))
 
-    def unload(self):
-        """Manual and idle unload share the same no-recording/no-pending guard."""
+    def unload(self, *, reason='manual', expected_generation=None):
+        """Never unload a new model, an active recording, or pending insertion."""
         with self._capture_lock:
-            if (self.recording or self.speaking or self._pending_jobs or self.busy or self.loading
-                    or self._unloading or self._quit.is_set()):
+            if (self.model is None or self.recording or self.speaking or self._pending_jobs or self.busy or self.loading
+                    or self._unloading or self._quit.is_set()
+                    or (expected_generation is not None and expected_generation != self._model_generation)):
                 return False
             self._unloading = True
         try:
             self.set_listening(False)
             self.unloaded_idle = True
+            self.unload_reason = reason
             with self._capture_lock:
                 self._model_generation += 1
                 self._carry = np.zeros(0, dtype=np.float32)
             with self._lock:
                 old, self.model = self.model, None
-                # An idle native worker has no result to preserve. Terminating
-                # it releases its entire address space, including allocator caches.
                 self._close_model(old, force=True)
             self._clear_audio_queues()
             del old
             gc.collect()
-            self.unloaded.emit()
-            return True
         finally:
             self._unloading = False
+        self.unloaded.emit()  # observers see the completed, unlocked state
+        return True
 
     def _load(self, path):
         model = None
@@ -2834,6 +3014,7 @@ class Engine(QObject):
                 continue
             session = token if kind in ("stage", "finish") else None
             self.busy = True
+            pasted = False
             try:
                 if (self._quit.is_set() or generation != self._model_generation
                         or (session is not None and session.cancelled)):
@@ -2877,7 +3058,7 @@ class Engine(QObject):
                                   (token == self._capture_id and not (self.manual or self._shortcut_mode))))
                 if text and valid:
                     self.heard.emit(text)
-                    self._type(text + " ", generation)  # one insertion, optional one Enter
+                    pasted = self._type(text + " ", generation) is True  # one insertion, optional one Enter
             except Exception as exc:
                 if session is not None and kind == "stage":
                     session.error = str(exc) or type(exc).__name__  # report once at commit, never paste a partial message
@@ -2892,6 +3073,8 @@ class Engine(QObject):
                     session.parts.clear()
                 blocks = audio = model = parts = None  # do not pin the last NumPy chunk/model while idle
                 del payload
+                if pasted and self.unload_after_paste:
+                    self.unload(reason="paste", expected_generation=generation)
 
     def _type(self, text, generation=None):
         def valid():
@@ -2902,9 +3085,9 @@ class Engine(QObject):
                 keys = (0x10, 0x11, 0x12, 0x5B, 0x5C)
                 while any(ctypes.windll.user32.GetAsyncKeyState(key) & 0x8000 for key in keys):
                     if self._quit.wait(.01) or not valid():
-                        return
+                        return False
             if not valid():
-                return
+                return False
             if self._kb is None:
                 from pynput.keyboard import Controller
                 self._kb = Controller()
@@ -2928,7 +3111,7 @@ class Engine(QObject):
                     if self.shortcut.replace(" ", "").lower() == "ctrl+v":
                         modifier, key = Key.shift, Key.insert
                     if not valid():
-                        return
+                        return False
                     self._kb.press(modifier)
                     try:
                         self._kb.press(key)
@@ -2937,7 +3120,7 @@ class Engine(QObject):
                         self._kb.release(modifier)
                     pasted = True
             if not valid():
-                return
+                return False
             if not pasted:
                 # Accessibility/clipboard-restricted targets still have a fallback.
                 if "\n" in text or "\r" in text:
@@ -2946,13 +3129,15 @@ class Engine(QObject):
             if self.auto_enter and valid():
                 # Let asynchronous paste handlers finish before sending once.
                 if pasted and self._quit.wait(.08):
-                    return
+                    return False
                 if valid():
                     from pynput.keyboard import Key
                     self._kb.press(Key.enter)
                     self._kb.release(Key.enter)
+            return valid()
         except Exception as exc:
             self.message.emit(f"Typing error: {exc}  (Python: {sys.executable})")
+            return False
 
     def shutdown(self):
         if self._quit.is_set():
@@ -3680,6 +3865,353 @@ def _short(text, n=34):
     return text if len(text) <= n else text[:n - 1] + "\u2026"
 
 
+def _rounded_style(dark):
+    c = palette(dark)
+    qss = """
+        QLabel#updateHeading {font:600 17pt 'Segoe UI';}
+        QFrame#card[selected="true"] {border:1px solid @accent@;}
+        QKeySequenceEdit {background:@input@; border:1px solid @border@; border-radius:12px; padding:2px;}
+        QKeySequenceEdit QLineEdit {background:transparent; border:none; padding:6px;}
+        QMenu {background:@card@; color:@text@; border:1px solid @border@; border-radius:12px; padding:6px;}
+        QMenu::item {padding:8px 14px; border-radius:8px;}
+        QMenu::item:selected {background:@hover@;}
+    QDialog {background:transparent;}
+    QFrame#win {background:@bg@; border:1px solid @border@; border-radius:22px;}
+    QWidget#bar {background:transparent;}
+    QScrollArea {background:transparent; border:none;}
+    QScrollArea > QWidget > QWidget {background:transparent;}
+    QLabel {background:transparent; color:@text@; font:10pt 'Segoe UI';}
+    QLabel#h1 {font:600 22pt 'Segoe UI';}
+    QLabel#ttl {font:600 10.5pt 'Segoe UI';}
+    QLabel#sub {color:@sub@; font:9pt 'Segoe UI';}
+    QLabel#path {color:@sub@; font:9pt 'Segoe UI'; background:@input@; border-radius:9px; padding:8px 10px;}
+    QFrame#card {background:@card@; border:1px solid @border@; border-radius:18px;}
+    QLineEdit {background:@input@; color:@text@; border:1px solid @border@; border-radius:12px;
+               padding:8px 10px; font:10pt 'Segoe UI'; selection-background-color:@accent@;}
+    QLineEdit:focus {border:1px solid @accent@;}
+    QPlainTextEdit {background:@input@; color:@text@; border:1px solid @border@; border-radius:12px;
+               padding:8px 10px; font:10pt 'Segoe UI'; selection-background-color:@accent@;}
+    QPlainTextEdit:focus {border:1px solid @accent@;}
+    QComboBox {background:@input@; color:@text@; border:1px solid @border@; border-radius:12px;
+               padding:6px 10px; font:10pt 'Segoe UI';}
+    QComboBox QLineEdit {border:none; background:transparent; padding:2px;}
+    QComboBox::drop-down {border:none; width:26px;}
+    QComboBox QAbstractItemView {background:@card@; color:@text@; border:1px solid @border@;
+               selection-background-color:@accent@; selection-color:white; outline:none;}
+    QPushButton {background:@input@; color:@text@; border:1px solid @border@; border-radius:12px;
+               padding:9px 14px; font:600 10pt 'Segoe UI';}
+    QPushButton:hover {background:@hover@;}
+    QPushButton#primary {background:@accent@; color:white; border:none;}
+    QPushButton#primary:hover {background:#d764f6;}
+    QPushButton:disabled {color:@sub@;}
+    QProgressBar {background:@input@; border:none; border-radius:6px;}
+    QProgressBar::chunk {background:@accent@; border-radius:6px;}
+    QProgressBar#meter {border-radius:4px;}
+    QProgressBar#meter::chunk {background:#34c759; border-radius:4px;}
+    QScrollBar:vertical {background:transparent; width:10px; margin:2px; border:none; border-radius:5px;}
+    QScrollBar::handle:vertical {background:@hover@; border-radius:5px; min-height:30px;}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {height:0; width:0;}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {background:transparent;}
+    QScrollBar:horizontal {background:@card@; height:10px; margin:2px; border:none; border-radius:5px;}
+    QScrollBar::handle:horizontal {background:@hover@; border-radius:5px; min-width:30px;}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {height:0; width:0;}
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {background:transparent;}
+    """
+    for k, v in dict(c, accent=ACCENT).items():
+        qss = qss.replace(f"@{k}@", v)
+    return qss
+
+
+def _update_transfer_text(state):
+    total, received = state.get('total', 0), state.get('received', 0)
+    if state.get('phase') != 'downloading' or not total:
+        return ''
+    text = f'{received / 1048576:.1f} / {total / 1048576:.1f} MiB'
+    speed, eta = state.get('speed') or 0, state.get('eta')
+    if speed > 0:
+        text += f'  •  {speed / 1048576:.1f} MiB/s'
+    if eta is not None:
+        seconds = max(0, math.ceil(eta))
+        text += '  •  ' + (f'{seconds // 60}m {seconds % 60:02d}s left' if seconds >= 60 else f'{seconds}s left')
+    return text
+
+
+class SmoothProgressBar(QProgressBar):
+    """Animate measured values, never fabricate download/verification work."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setRange(0, 100)
+        self.setValue(0)
+        self.setTextVisible(False)
+        self.setFixedHeight(12)
+        self.anim = QPropertyAnimation(self, b'value', self)
+        self.anim.setDuration(170)
+        self.anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.phase = ''
+        self.target = 0
+
+    def set_progress(self, state):
+        phase, percent = state.get('phase', 'idle'), state.get('percent')
+        self.setVisible(phase in ('checking', 'downloading', 'verifying', 'ready', 'installing', 'cancelling'))
+        if phase != self.phase:
+            self.anim.stop()
+            self.setRange(0, 100)
+            self.setValue(0)
+            self.target = 0
+            self.phase = phase
+        if percent is None and phase in ('checking', 'verifying', 'installing', 'cancelling'):
+            self.anim.stop()
+            self.setRange(0, 0)
+            return
+        if percent is None:
+            return
+        value = max(self.target, min(100, max(0, int(percent))))
+        self.setRange(0, 100)
+        self.target = value
+        self.anim.stop()
+        self.anim.setStartValue(max(0, self.value()))
+        self.anim.setEndValue(value)
+        self.anim.start()
+
+
+class UpdateDialog(QDialog):
+    check_requested = pyqtSignal()
+    cancel_requested = pyqtSignal()
+    install_requested = pyqtSignal()
+    later_requested = pyqtSignal()
+
+    def __init__(self, dark=True):
+        super().__init__(None, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowTitle('Dictate updates')
+        self.setWindowIcon(_application_icon())
+        self.resize(520, 350)
+        self.setMinimumWidth(440)
+        self._confirming, self._allowed = False, True
+        self._state = {'phase': 'idle', 'status': 'Check the official stable release.'}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        win = QFrame()
+        win.setObjectName('win')
+        outer.addWidget(win)
+        root = QVBoxLayout(win)
+        root.setContentsMargins(24, 20, 24, 22)
+        root.setSpacing(16)
+        title = TitleBar()
+        line = QHBoxLayout(title)
+        line.setContentsMargins(0, 0, 0, 0)
+        heading = QLabel('Release updates')
+        heading.setObjectName('ttl')
+        line.addWidget(heading, 1)
+        close = CloseButton()
+        close.clicked.connect(self._close)
+        line.addWidget(close)
+        root.addWidget(title)
+        self.heading = QLabel('Keep Dictate up to date')
+        self.heading.setObjectName('updateHeading')
+        self.heading.setWordWrap(True)
+        root.addWidget(self.heading)
+        self.status = QLabel()
+        self.status.setObjectName('sub')
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        root.addWidget(self.status)
+        self.progress = SmoothProgressBar()
+        root.addWidget(self.progress)
+        self.transfer = QLabel()
+        self.transfer.setObjectName('sub')
+        self.transfer.setWordWrap(True)
+        root.addWidget(self.transfer)
+        stages = QLabel('1  Download    •    2  Verify SHA-256    •    3  Install & restart')
+        stages.setObjectName('sub')
+        stages.setWordWrap(True)
+        root.addWidget(stages)
+        self.notice = QLabel('Settings, shortcuts, custom symbols and models stay in place.\n'
+                             'Nothing installs without your approval.')
+        self.notice.setObjectName('sub')
+        self.notice.setWordWrap(True)
+        self.notice.setTextFormat(Qt.TextFormat.PlainText)
+        root.addWidget(self.notice)
+        root.addStretch()
+        buttons = QHBoxLayout()
+        self.secondary = QPushButton('Close')
+        self.secondary.setAutoDefault(False)
+        self.secondary.clicked.connect(self._secondary)
+        self.cancel = QPushButton('Cancel download')
+        self.cancel.setAutoDefault(False)
+        self.cancel.clicked.connect(self.cancel_requested.emit)
+        self.primary = QPushButton('Check for updates')
+        self.primary.setObjectName('primary')
+        self.primary.setAutoDefault(False)
+        self.primary.clicked.connect(self._primary)
+        for button in (self.secondary, self.cancel, self.primary):
+            buttons.addWidget(button)
+        root.addLayout(buttons)
+        self.set_theme(dark)
+        self.set_state(self._state)
+
+    def set_theme(self, dark):
+        self.setStyleSheet(_rounded_style(dark))
+
+    def set_state(self, state):
+        self._state = dict(state)
+        phase, version = state.get('phase', 'idle'), state.get('version', '')
+        heading = {'checking': 'Checking for updates', 'downloading': f'Downloading Dictate {version}',
+                   'verifying': 'Checking every byte', 'ready': f'Dictate {version} is ready',
+                   'current': 'You’re up to date', 'cancelled': 'Download cancelled',
+                   'error': 'Could not complete the update', 'installing': 'Installing and restarting'}
+        self.heading.setText(heading.get(phase, 'Keep Dictate up to date'))
+        self.status.setText(state.get('status', ''))
+        self.progress.set_progress(state)
+        transfer = _update_transfer_text(state)
+        self.transfer.setText(transfer)
+        self.transfer.setVisible(bool(transfer))
+        active = phase in ('checking', 'downloading', 'verifying', 'cancelling')
+        self.cancel.setVisible(active)
+        self.cancel.setEnabled(phase != 'cancelling')
+        self.secondary.setEnabled(phase != 'installing')
+        self.primary.setVisible(not active)
+        self.primary.setText('Install and restart' if phase == 'ready' else 'Check again')
+        self.primary.setEnabled(phase != 'installing' and (phase != 'ready' or self._allowed))
+        self.secondary.setText('Later' if phase == 'ready' else 'Close')
+        self.secondary.setDefault(True)  # an accidental Enter never installs
+        if phase == 'installing':
+            self.cancel.hide()
+            self.primary.hide()
+            self.secondary.setEnabled(False)
+
+    def set_install_allowed(self, allowed):
+        self._allowed = bool(allowed)
+        if self._state.get('phase') == 'ready':
+            self.primary.setEnabled(self._allowed)
+            self.primary.setToolTip('Finish dictation/model loading before installing.' if not allowed else '')
+
+    def _primary(self):
+        if self._state.get('phase') == 'ready':
+            if self._confirming:
+                self.accept()
+            else:
+                self.install_requested.emit()
+        else:
+            self.check_requested.emit()
+
+    def _secondary(self):
+        if self._confirming:
+            self.reject()
+        else:
+            if self._state.get('phase') == 'ready':
+                self.later_requested.emit()
+            self.hide()
+
+    def _close(self):
+        self._secondary()
+
+    def reject(self):
+        if not self._confirming and self._state.get('phase') == 'ready':
+            self.later_requested.emit()
+        super().reject()
+
+    def ask_install(self, candidate, directory):
+        self.set_state(dict(phase='ready', percent=100, version=candidate['version'],
+                            status='Downloaded and verified against GitHub’s digest and SHA256SUMS.txt.'))
+        self.notice.setText('Close Dictate, update this existing installation, then restart?\n'
+                            f'{directory}\nSettings, shortcuts, custom symbols and models are retained.')
+        self.set_install_allowed(True)
+        self._confirming = True
+        try:
+            return self.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._confirming = False
+
+
+def _confirm_release_update(app, candidate, directory):
+    return app._updates_window().ask_install(candidate, directory)
+
+
+class ModelCatalogDialog(QDialog):
+    model_selected = pyqtSignal(str)
+
+    def __init__(self, dark=True, selected=''):
+        super().__init__(None, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowTitle('Dictate — supported models')
+        self.setWindowIcon(_application_icon())
+        self.resize(680, 590)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        win = QFrame()
+        win.setObjectName('win')
+        outer.addWidget(win)
+        root = QVBoxLayout(win)
+        root.setContentsMargins(22, 18, 22, 22)
+        root.setSpacing(14)
+        title = TitleBar()
+        row = QHBoxLayout(title)
+        row.setContentsMargins(0, 0, 0, 0)
+        name = QLabel('Supported speech models')
+        name.setObjectName('updateHeading')
+        row.addWidget(name, 1)
+        close = CloseButton()
+        close.clicked.connect(self.close)
+        row.addWidget(close)
+        root.addWidget(title)
+        sub = QLabel('Curated GGUF models for local CPU dictation. Download sizes are not RAM requirements.\n'
+                     'Other speech architectures/quantizations are not automatically supported.')
+        sub.setObjectName('sub')
+        sub.setWordWrap(True)
+        root.addWidget(sub)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body = QWidget()
+        body.setObjectName('inner')
+        cards = QVBoxLayout(body)
+        cards.setContentsMargins(0, 0, 8, 0)
+        cards.setSpacing(12)
+        for model in MODEL_CATALOG:
+            card, layout = _card()
+            card.setProperty('selected', model['repo'] == selected)
+            layout.addLayout(_text_block(model['name'], f"{model['languages']}  •  {model['engine']}  •  {model['decoder']}"))
+            description = QLabel(model['description'])
+            description.setWordWrap(True)
+            description.setObjectName('sub')
+            layout.addWidget(description)
+            variants = QLabel('   ·   '.join(f"{item['quant']}  {item['bytes'] / 1000000:.0f} MB" for item in model['files']))
+            variants.setObjectName('sub')
+            variants.setWordWrap(True)
+            layout.addWidget(variants)
+            checked = ', '.join(model['release_checks'])
+            note = QLabel(f"Release fixtures: {checked}. Other variants are available upstream, not all release-tested.\n"
+                          f"License: {model['license']}. Curated downloads use a fixed revision.")
+            note.setObjectName('sub')
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            actions = QHBoxLayout()
+            link = QLabel(f'<a style="color:{ACCENT};" href="https://huggingface.co/{model["repo"]}">Model card / license ↗</a>')
+            link.setOpenExternalLinks(True)
+            actions.addWidget(link, 1)
+            button = QPushButton('Use this model')
+            button.clicked.connect(lambda _, repo=model['repo']: self._choose(repo))
+            actions.addWidget(button)
+            layout.addLayout(actions)
+            cards.addWidget(card)
+        cards.addStretch()
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+        footer = QLabel('Need another repository? Type its ID in Speech model, or select a compatible local .gguf.\n'
+                        'The native engine must support it; arbitrary LLM GGUF files will not work. English number/symbol commands remain English.')
+        footer.setObjectName('sub')
+        footer.setWordWrap(True)
+        root.addWidget(footer)
+        self.setStyleSheet(_rounded_style(dark))
+
+    def _choose(self, repo):
+        self.model_selected.emit(repo)
+        self.accept()
+
+
+
 class SettingsDialog(QDialog):
     download_done = pyqtSignal(str)
     download_failed = pyqtSignal(str)
@@ -3692,6 +4224,9 @@ class SettingsDialog(QDialog):
     stop_mode_changed = pyqtSignal(str)
     update_check_requested = pyqtSignal()
     updates_changed = pyqtSignal(bool)
+    lifecycle_changed = pyqtSignal()
+    update_cancel_requested = pyqtSignal()
+    update_progress_requested = pyqtSignal()
 
     def __init__(self, settings, engine):
         super().__init__(None, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
@@ -3792,8 +4327,8 @@ class SettingsDialog(QDialog):
         self.key_note.hide()
         cl.addWidget(self.key_note)
         cl.addLayout(_text_block("Dictation shortcut",
-                                 "Manual mode: press to start, press again to stop and type. "
-                                 "Auto mode: turns the mic on / off."))
+                                 "Press to start; press again to stop and paste the whole session. "
+                                 "The show / hide shortcut never starts recording."))
         row = QHBoxLayout()
         self.keys2 = QKeySequenceEdit(QKeySequence(settings.get("dict_hotkey", DEFAULTS["dict_hotkey"])))
         try:
@@ -3841,8 +4376,8 @@ class SettingsDialog(QDialog):
 
         card, cl = _card()
         cl.addLayout(_text_block("Try it",
-                                 "1. Load a model   2. Click in the box below   3. Speak, then pause. "
-                                 "The text is typed at your cursor - in any app."))
+                                 "1. Select a model   2. Click below   3. Press the dictation shortcut to start, "
+                                 "then again to stop and paste. The text goes to your cursor in any app."))
         self.test = QPlainTextEdit()
         self.test.setPlaceholderText("Click here and speak...")
         self.test.setFixedHeight(120)
@@ -3865,7 +4400,7 @@ class SettingsDialog(QDialog):
         self.speed.setCurrentIndex(max(0, self.speed.findData(settings.get("pause_blocks", 8))))
         self.speed.currentIndexChanged.connect(self._speed)
         cl.addWidget(self.speed)
-        cl.addLayout(_text_block("Stop mode", "Auto stops when you pause. Manual records until you press the dictation shortcut again."))
+        cl.addLayout(_text_block("Stop mode", "Applies to the pop-up mic control. The dictation shortcut always uses explicit start / stop."))
         self.stopmode = QComboBox()
         self.stopmode.addItem("Auto  -  stops when you pause", "auto")
         self.stopmode.addItem("Manual  -  press shortcut again to stop", "manual")
@@ -3910,14 +4445,38 @@ class SettingsDialog(QDialog):
         cl.addWidget(self.status)
         self.repo = QComboBox()
         self.repo.setEditable(True)
-        self.repo.addItems(PRESET_REPOS)
-        self.repo.setToolTip("Hugging Face repo id for a supported CrispASR or transcribe.cpp speech model")
+        for model in MODEL_CATALOG:
+            self.repo.addItem(model['name'], model['repo'])
+        self.repo.setToolTip("Choose a named model, or type a custom Hugging Face repository ID")
         self.combo = QComboBox()
-        self.combo.addItems(list(QUANTS))
+        self.model_note = QLabel()
+        self.model_note.setObjectName('sub')
+        self.model_note.setWordWrap(True)
         cl.addWidget(self.repo)
         cl.addWidget(self.combo)
+        cl.addWidget(self.model_note)
+        model_button = QPushButton('Supported models / details')
+        model_button.clicked.connect(self._show_models)
+        cl.addWidget(model_button)
+        self.repo.currentIndexChanged.connect(self._model_selection)
+        self.repo.lineEdit().editingFinished.connect(self._model_selection)
+        self.combo.currentIndexChanged.connect(self._model_quant_changed)
+        preferred = settings.get('model_repo') or _catalog_for_path(settings['model_path']) or PRESET_REPOS[0]
+        self._select_repo(preferred)
+        self._catalog_dialog = None
 
-        cl.addLayout(_text_block("Unload model when idle", "Frees RAM. Click the mic to reload it."))
+        for key, title, description in (
+                ('unload_after_paste', 'Unload after pasting', 'Release model RAM after successful insertion; never during recording or queued work.'),
+                ('preload_on_popup', 'Preload when opening pop-up', 'Show / hide shortcut loads the selected model in the background. No recording starts.')):
+            row = QHBoxLayout()
+            row.addLayout(_text_block(title, description), 1)
+            control = Switch(settings.get(key, True))
+            control.setAccessibleName(title)
+            control.toggled.connect(lambda on, name=key: self._lifecycle(name, on))
+            setattr(self, key, control)
+            row.addWidget(control)
+            cl.addLayout(row)
+        cl.addLayout(_text_block("Unload model when idle", "Independent fallback timer. Show the pop-up or use the dictation shortcut to reload."))
         self.unload = QComboBox()
         for label, mins in UNLOAD_CHOICES:
             self.unload.addItem(label, mins)
@@ -3981,9 +4540,26 @@ class SettingsDialog(QDialog):
         self.update_status.setObjectName("sub")
         self.update_status.setWordWrap(True)
         cl.addWidget(self.update_status)
-        button = QPushButton("Check for updates")
-        button.clicked.connect(lambda: self.update_check_requested.emit())
-        cl.addWidget(button)
+        self.update_bar = SmoothProgressBar()
+        self.update_bar.hide()
+        cl.addWidget(self.update_bar)
+        self.update_transfer = QLabel()
+        self.update_transfer.setObjectName('sub')
+        self.update_transfer.setWordWrap(True)
+        self.update_transfer.hide()
+        cl.addWidget(self.update_transfer)
+        self.update_check = QPushButton("Check for updates")
+        self.update_check.clicked.connect(self.update_check_requested.emit)
+        cl.addWidget(self.update_check)
+        row = QHBoxLayout()
+        self.update_cancel = QPushButton('Cancel download')
+        self.update_cancel.hide()
+        self.update_cancel.clicked.connect(self.update_cancel_requested.emit)
+        button = QPushButton('Update progress…')
+        button.clicked.connect(self.update_progress_requested.emit)
+        row.addWidget(self.update_cancel)
+        row.addWidget(button)
+        cl.addLayout(row)
         c3.addWidget(card)
         c3.addStretch()
 
@@ -4019,8 +4595,10 @@ class SettingsDialog(QDialog):
         self.btn_unload.setEnabled(e.model is not None and _update_install_safe(e))
         lvl = e.level if e.active else e.mon_level
         self.meter.setValue(min(100, int(lvl * 22 * 100)))
-        if e.model is None:
-            s = ("Model unloaded - click the mic in the pop-up to reload" if e.unloaded_idle
+        if e.loading:
+            s = "Loading model — recording has not started"
+        elif e.model is None:
+            s = ("Model unloaded — show the pop-up to preload, or use the dictation shortcut" if e.unloaded_idle
                  else "Load a speech model first (right side)")
         elif not e.listening:
             s = "Microphone is OFF - click the mic in the pop-up"
@@ -4038,53 +4616,7 @@ class SettingsDialog(QDialog):
     # ---- look
     def apply_theme(self):
         dark = self.settings["dark_mode"]
-        c = palette(dark)
-        qss = """
-        QDialog {background:transparent;}
-        QFrame#win {background:@bg@; border:1px solid @border@; border-radius:20px;}
-        QWidget#bar {background:transparent;}
-        QScrollArea {background:transparent; border:none;}
-        QScrollArea > QWidget > QWidget {background:transparent;}
-        QLabel {background:transparent; color:@text@; font:10pt 'Segoe UI';}
-        QLabel#h1 {font:600 22pt 'Segoe UI';}
-        QLabel#ttl {font:600 10.5pt 'Segoe UI';}
-        QLabel#sub {color:@sub@; font:9pt 'Segoe UI';}
-        QLabel#path {color:@sub@; font:9pt 'Segoe UI'; background:@input@; border-radius:9px; padding:8px 10px;}
-        QFrame#card {background:@card@; border:1px solid @border@; border-radius:16px;}
-        QLineEdit {background:@input@; color:@text@; border:1px solid @border@; border-radius:10px;
-                   padding:8px 10px; font:10pt 'Segoe UI'; selection-background-color:@accent@;}
-        QLineEdit:focus {border:1px solid @accent@;}
-        QPlainTextEdit {background:@input@; color:@text@; border:1px solid @border@; border-radius:12px;
-                   padding:8px 10px; font:10pt 'Segoe UI'; selection-background-color:@accent@;}
-        QPlainTextEdit:focus {border:1px solid @accent@;}
-        QComboBox {background:@input@; color:@text@; border:1px solid @border@; border-radius:10px;
-                   padding:6px 10px; font:10pt 'Segoe UI';}
-        QComboBox QLineEdit {border:none; background:transparent; padding:2px;}
-        QComboBox::drop-down {border:none; width:26px;}
-        QComboBox QAbstractItemView {background:@card@; color:@text@; border:1px solid @border@;
-                   selection-background-color:@accent@; selection-color:white; outline:none;}
-        QPushButton {background:@input@; color:@text@; border:1px solid @border@; border-radius:10px;
-                   padding:9px 14px; font:600 10pt 'Segoe UI';}
-        QPushButton:hover {background:@hover@;}
-        QPushButton#primary {background:@accent@; color:white; border:none;}
-        QPushButton#primary:hover {background:#d764f6;}
-        QPushButton:disabled {color:@sub@;}
-        QProgressBar {background:@input@; border:none; border-radius:2px;}
-        QProgressBar::chunk {background:@accent@; border-radius:2px;}
-        QProgressBar#meter {border-radius:4px;}
-        QProgressBar#meter::chunk {background:#34c759; border-radius:4px;}
-        QScrollBar:vertical {background:transparent; width:10px; margin:2px; border:none; border-radius:5px;}
-        QScrollBar::handle:vertical {background:@hover@; border-radius:5px; min-height:30px;}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {height:0; width:0;}
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {background:transparent;}
-        QScrollBar:horizontal {background:@card@; height:10px; margin:2px; border:none; border-radius:5px;}
-        QScrollBar::handle:horizontal {background:@hover@; border-radius:5px; min-width:30px;}
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {height:0; width:0;}
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {background:transparent;}
-        """
-        for k, v in dict(c, accent=ACCENT).items():
-            qss = qss.replace(f"@{k}@", v)
-        self.setStyleSheet(qss)
+        self.setStyleSheet(_rounded_style(dark))
         self.picker.set_theme(dark)
 
     def refresh_position(self):
@@ -4095,13 +4627,15 @@ class SettingsDialog(QDialog):
         name = _short(Path(p).name) if p else ""
         if extra:
             text = extra
+        elif self.engine.loading:
+            text = f"Loading: {name}"
         elif self.engine.model is not None:
             info = self.engine.model_info
             details = " / ".join(str(info[key])[:80] for key in ("architecture", "quantization") if info.get(key))
             size = f" / {info['bytes'] / (1024 * 1024):.0f} MiB file" if info.get('bytes') else ''
             text = f"Loaded: {name}" + (f"\n{details}{size}" if details or size else "")
         elif p and self.engine.unloaded_idle:
-            text = f"Unloaded: {name} - click the mic to reload"
+            text = f"Unloaded: {name} — ready to reload on demand"
         elif p:
             text = f"Selected: {name}"
         else:
@@ -4292,6 +4826,74 @@ class SettingsDialog(QDialog):
     def set_update_status(self, text):
         self.update_status.setText(text)
 
+    def set_update_progress(self, state):
+        self.set_update_status(state.get('status', ''))
+        self.update_bar.set_progress(state)
+        transfer = _update_transfer_text(state)
+        self.update_transfer.setText(transfer)
+        self.update_transfer.setVisible(bool(transfer))
+        busy = state.get('phase') in ('checking', 'downloading', 'verifying', 'cancelling')
+        self.update_check.setEnabled(not busy)
+        self.update_cancel.setVisible(busy)
+        self.update_cancel.setEnabled(state.get('phase') != 'cancelling')
+
+    def _lifecycle(self, key, on):
+        self.settings[key] = bool(on)
+        self.engine.unload_after_paste = bool(self.settings.get('unload_after_paste', True))
+        save_settings(self.settings)
+        self.lifecycle_changed.emit()
+
+    def _selected_repo(self):
+        text = self.repo.currentText().strip()
+        i = self.repo.currentIndex()
+        return (self.repo.itemData(i) or text) if i >= 0 and text == self.repo.itemText(i) else text
+
+    def _select_repo(self, repo):
+        i = self.repo.findData(repo)
+        if i >= 0:
+            self.repo.setCurrentIndex(i)
+        else:
+            self.repo.setCurrentText(repo)
+        self._model_selection()
+
+    def _model_selection(self, *_):
+        repo = self._selected_repo()
+        model = _catalog_model(repo)
+        previous = self.combo.currentData() if self.combo.count() else self.settings.get('model_quant')
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        if model:
+            for item in model['files']:
+                label = f"{item['quant']}  ·  {item['bytes'] / 1000000:.0f} MB"
+                if item['quant'] == model['default_quant']:
+                    label += '  ·  low memory'
+                self.combo.addItem(label, item['quant'].lower())
+            self.combo.addItem('Any  ·  prefer low memory', '')
+            i = self.combo.findData(previous)
+            self.combo.setCurrentIndex(i if i >= 0 else self.combo.findData(model['default_quant'].lower()))
+            self.model_note.setText(f"{model['languages']}  •  {model['engine']}\nDownload size, not runtime RAM. Details include licenses and tested variants.")
+        else:
+            for label, value in QUANTS.items():
+                self.combo.addItem(label, value)
+            self.combo.setCurrentIndex(max(0, self.combo.findData(previous)))
+            self.model_note.setText('Custom repository: native architecture support is required. Not every GGUF is a speech model.')
+        self.combo.blockSignals(False)
+        self.repo.setToolTip(repo)
+
+    def _model_quant_changed(self, *_):
+        self.settings['model_repo'] = self._selected_repo()
+        self.settings['model_quant'] = self.combo.currentData() or ''
+        save_settings(self.settings)
+
+    def _show_models(self):
+        self._catalog_dialog = ModelCatalogDialog(self.settings['dark_mode'], self._selected_repo())
+        self._catalog_dialog.model_selected.connect(self._select_repo)
+        g = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        self._catalog_dialog.resize(min(680, g.width() - 40), min(590, g.height() - 40))
+        self._catalog_dialog.move(g.center() - self._catalog_dialog.rect().center())
+        self._catalog_dialog.show()
+        self._catalog_dialog.raise_()
+
     def _unload(self, i):
         self.settings["unload_min"] = int(self.unload.itemData(i) or 0)
         save_settings(self.settings)
@@ -4321,8 +4923,8 @@ class SettingsDialog(QDialog):
             self.refresh_status(f"Loading: {_short(Path(f).name)}")
 
     def _download(self):
-        quant = QUANTS[self.combo.currentText()]
-        repo = self.repo.currentText().strip()
+        quant = self.combo.currentData() or ''
+        repo = self._selected_repo()
         if "/" not in repo:
             self.refresh_status("Enter a Hugging Face repo id like  user/model-GGUF")
             return
@@ -4332,6 +4934,8 @@ class SettingsDialog(QDialog):
         except Exception as e:
             self.refresh_status(f"Download failed: cannot use that folder ({e})")
             return
+        self.settings['model_repo'], self.settings['model_quant'] = repo, quant
+        save_settings(self.settings)
         self.btn_dl.setEnabled(False)
         self.btn_pick.setEnabled(False)
         self.bar.show()
@@ -4340,9 +4944,11 @@ class SettingsDialog(QDialog):
         def run():
             try:
                 from huggingface_hub import hf_hub_download, list_repo_files
-                files = [f for f in list_repo_files(repo) if f.lower().endswith(".gguf")]
-                selected = select_model_file(files, quant)
-                out = hf_hub_download(repo, selected, local_dir=str(dest / repo.split("/")[-1]))
+                model = _catalog_model(repo)
+                revision = model['revision'] if model else None
+                files = [f for f in list_repo_files(repo, revision=revision) if f.lower().endswith(".gguf")]
+                selected = _catalog_download_file(repo, files, quant)
+                out = hf_hub_download(repo, selected, revision=revision, local_dir=str(dest / repo.split("/")[-1]))
                 self.download_done.emit(str(out))
             except Exception as e:
                 self.download_failed.emit(str(e))
@@ -4353,7 +4959,8 @@ class SettingsDialog(QDialog):
         self.btn_dl.setEnabled(True)
         self.btn_pick.setEnabled(True)
         self.model_chosen.emit(path)
-        self.refresh_status(f"Downloaded. Loading: {_short(Path(path).name)}")
+        prefix = "Downloaded. Loading" if self.engine.loading else "Downloaded; file kept. Select when ready"
+        self.refresh_status(f"{prefix}: {_short(Path(path).name)}")
 
     def _dl_fail(self, err):
         self.bar.hide()
@@ -4385,16 +4992,19 @@ class App:
         except (OSError, ValueError) as exc:
             custom_error = 'Custom symbols: ' + str(exc)
         self.engine.device_name = self.settings["mic"]
+        self.engine.unload_after_paste = bool(self.settings.get("unload_after_paste", True))
         self.engine.auto_enter = self.settings.get("auto_enter", False)
         self.engine.silence_blocks = int(self.settings.get("pause_blocks", 8))
         self.pill = Pill(self.engine, self.settings)
         self.toast = Toast()
         self.dialog = None
+        self.update_dialog = None
         self._dictation_after_load = False
         self._quitting = False
         self._update_prompt_open = False
         self.updater = ReleaseUpdater()
         self.updater.status_changed.connect(self._update_status)
+        self.updater.progress_changed.connect(self._update_progress)
         self.updater.download_ready.connect(self.consider_update)
         self._last_update_check = time.monotonic()
 
@@ -4424,7 +5034,9 @@ class App:
         unload_action.triggered.connect(self.unload_model)
         update_action = QAction("Check for updates", menu)
         update_action.triggered.connect(lambda: self.check_updates(manual=True))
-        for a in (a0, a1, unload_action, update_action, a2):
+        progress_action = QAction("Update progress…", menu)
+        progress_action.triggered.connect(self.show_update_progress)
+        for a in (a0, a1, unload_action, update_action, progress_action, a2):
             menu.addAction(a)
         menu.aboutToShow.connect(lambda: unload_action.setEnabled(
             self.engine.model is not None and _update_install_safe(self.engine)))
@@ -4452,8 +5064,11 @@ class App:
 
         path = self.settings["model_path"]
         if path and Path(path).exists():
-            self.engine.load_model(path)
-            self.say("Loading model...")
+            if not self.settings.get('preload_on_popup', True):
+                self.engine.load_model(path)
+                self.say("Loading model...")
+            else:
+                self.say('Model selected — show the pop-up to preload, or press the dictation shortcut.', 4500)
         else:
             self.say("Open Settings to download or select a model")
         if custom_error:
@@ -4502,8 +5117,8 @@ class App:
             self.pill.hide_popup()
         else:
             self.pill.show_popup()
-
-
+            if self.settings.get('preload_on_popup', True):
+                self.reload_model(purpose='popup')
 
     def set_dict_hotkey(self, seq):
         ok = self.dict_hotkeys.set(seq) if seq else False
@@ -4520,13 +5135,13 @@ class App:
     @_preserve_input_focus
     def on_dictation_key(self):
         e = self.engine
-        if e.model is None:
+        if e.model is None or e.loading or e._unloading:
             mp = self.settings["model_path"]
             if mp and Path(mp).exists():
                 self._dictation_after_load = not self._dictation_after_load
                 if self._dictation_after_load:
                     if not e.loading:
-                        self.reload_model()
+                        self.reload_model(purpose="dictation")
                     else:
                         self.say("Loading model - recording will start when ready", 2500)
                 else:
@@ -4581,12 +5196,16 @@ class App:
     def _update_status(self, text):
         if self.dialog is not None:
             self.dialog.set_update_status(text)
+        if self.update_dialog is not None:
+            self.update_dialog.status.setText(text)
         if self.updater.manual and text.startswith(('Update check failed', 'Dictate ')):
             self.say(text, 5000)
 
     def check_updates(self, manual=False):
         if self._quitting or (not manual and not self.settings.get('check_updates', True)):
             return
+        if manual:
+            self.show_update_progress()
         if os.name != 'nt':
             self.updater._status('The installer updater is available in the Windows app.')
             return
@@ -4603,7 +5222,48 @@ class App:
         if (os.name == 'nt' and self.settings.get('check_updates', True)
                 and time.monotonic() - self._last_update_check >= 6 * 60 * 60):
             self.check_updates()
+        if self.update_dialog is not None:
+            self.update_dialog.set_install_allowed(_update_install_safe(self.engine) and not self._dictation_after_load)
         self.consider_update()
+
+    def _update_progress(self, state):
+        if self.dialog is not None:
+            self.dialog.set_update_progress(state)
+        if self.update_dialog is not None:
+            self.update_dialog.set_state(state)
+
+    def _updates_window(self):
+        if self.update_dialog is None:
+            self.update_dialog = UpdateDialog(self.settings.get('dark_mode', True))
+            self.update_dialog.check_requested.connect(lambda: self.check_updates(manual=True))
+            self.update_dialog.cancel_requested.connect(self.updater.cancel)
+            self.update_dialog.install_requested.connect(self.install_update_now)
+            self.update_dialog.later_requested.connect(self.defer_update)
+        self.update_dialog.set_theme(self.settings.get('dark_mode', True))
+        self.update_dialog.set_state(self.updater.state)
+        return self.update_dialog
+
+    def show_update_progress(self):
+        window = self._updates_window()
+        window.set_install_allowed(_update_install_safe(self.engine) and not self._dictation_after_load)
+        if not window.isVisible():
+            g = (self.pill.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+            window.move(g.center() - window.rect().center())
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def install_update_now(self):
+        self.updater.manual = True
+        self.updater.deferred_version = ''
+        if not _update_install_safe(self.engine) or self._dictation_after_load:
+            self.say('Finish dictation/model loading before installing. Nothing was closed.', 4500)
+            return
+        self.consider_update()
+
+    def defer_update(self):
+        if self.updater.candidate:
+            self.updater.deferred_version = self.updater.candidate['version']
 
     def consider_update(self):
         updater, engine = self.updater, self.engine
@@ -4621,17 +5281,11 @@ class App:
         self._update_prompt_open = True
         try:
             directory = _installed_update_directory()
-            question = QMessageBox(QMessageBox.Icon.Question, 'Dictate update ready',
-                f"Dictate {candidate['version']} has been downloaded and SHA-256 verified.\n\n"
-                f"Close Dictate, install into this existing folder, and restart?\n{directory}\n\n"
-                "Your settings, shortcuts, custom symbols, and downloaded models are retained.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self.dialog)
-            question.setTextFormat(Qt.TextFormat.PlainText)
-            question.setDefaultButton(QMessageBox.StandardButton.No)
-            question.button(QMessageBox.StandardButton.Yes).setText('Install and restart')
-            question.button(QMessageBox.StandardButton.No).setText('Later')
-            if question.exec() != QMessageBox.StandardButton.Yes:
+            if not _confirm_release_update(self, candidate, directory):
                 updater.deferred_version = candidate['version']
+                return
+            if updater.candidate is not candidate or (getattr(updater, '_cancel', None) is not None and updater._cancel.is_set()):
+                self.say('This update was cancelled or replaced. Nothing was closed.', 4500)
                 return
             # Modal dialogs process shortcut events: consent must not override a
             # recording/transcription that started while the question was open.
@@ -4640,26 +5294,55 @@ class App:
                 self.say('Update postponed until dictation is finished. Nothing was closed.', 5000)
                 return
             _launch_update_helper(candidate, updater.installer, directory)
+            if self.update_dialog is not None:
+                self.update_dialog.set_state(dict(phase='installing', status='The native installer shows file progress, then restarts Dictate.'))
             self.quit()
         except Exception as exc:
             updater.deferred_version = candidate['version']
-            updater._status('Update installation blocked: ' + str(exc))
+            updater._publish('error', 'Update installation blocked: ' + str(exc))
             self.say(updater.status, 6000)
         finally:
             self._update_prompt_open = False
 
     def on_unloaded(self):
-        self.say("Model unloaded to free memory - click the mic to reload", 4000)
+        message = ('Text inserted; model unloaded to free memory.' if self.engine.unload_reason == 'paste'
+                   else 'Model unloaded to free memory.')
+        hint = (' Show the pop-up to preload, or use the dictation shortcut.'
+                if self.settings.get('preload_on_popup', True) else ' Use the dictation shortcut to reload.')
+        self.say(message + hint, 4000)
         if self.dialog:
             self.dialog.refresh_status()
 
-    def reload_model(self):
+    def reload_model(self, *, purpose='manual'):
+        if getattr(self, '_quitting', False):
+            return False
+        if purpose == 'popup' and (not self.settings.get('preload_on_popup', True)
+                or self.pill.user_hidden or not self.pill.isVisible()):
+            return False
+        if purpose == 'dictation' and not self._dictation_after_load:
+            return False
+        e = self.engine
+        if e.model is not None or e.loading:
+            return False
+        if e._unloading:
+            # A previous successful paste may still be releasing its worker.
+            # Retrying on Qt's thread avoids racing that worker or blocking UI.
+            QTimer.singleShot(100, functools.partial(self.reload_model, purpose=purpose))
+            return False
         path = self.settings["model_path"]
-        if path and Path(path).exists():
-            self.say("Loading model...")
-            self.engine.load_model(path)
+        if path and Path(path).exists() and e.load_model(path):
+            self.say('Loading model — recording only starts with the dictation shortcut.', 3000)
+            return True
+        return False
 
     def choose_model(self, path):
+        e = self.engine
+        if e._unloading:
+            QTimer.singleShot(100, functools.partial(self.choose_model, path))
+            return False
+        if not _update_install_safe(e) or self._dictation_after_load:
+            self.say('Finish dictation/model loading before switching models. Downloaded files are kept.', 4500)
+            return False
         self._dictation_after_load = False
         self.engine.set_listening(False)
         self.settings["model_path"] = path
@@ -4679,7 +5362,9 @@ class App:
             self.dialog.stop_mode_changed.connect(self.on_stop_mode)
             self.dialog.update_check_requested.connect(lambda: self.check_updates(manual=True))
             self.dialog.updates_changed.connect(self.set_updates_enabled)
-        self.dialog.set_update_status(self.updater.status)
+            self.dialog.update_cancel_requested.connect(self.updater.cancel)
+            self.dialog.update_progress_requested.connect(self.show_update_progress)
+        self.dialog.set_update_progress(self.updater.state)
         self.dialog.refresh_status()
         self.dialog.refresh_position()
         if not self.dialog.isVisible():
@@ -4746,6 +5431,10 @@ def _packaging_smoke_test(arguments):
         assert normalize_dictation_text("zerozerofive") == "005"
         assert normalize_dictation_text("hello enter world enter five zero") == "hello\nworld\n50"
         report['spoken_enter'] = {'newlines_are_text': True, 'implicit_enter_key': False}
+        report['model_lifecycle_defaults'] = {key: DEFAULTS[key] for key in ('unload_after_paste', 'preload_on_popup')}
+        assert all(report['model_lifecycle_defaults'].values())
+        report['model_catalog'] = [{'name': model['name'], 'repo': model['repo'], 'revision': model['revision'],
+                                    'release_fixtures': model['release_checks']} for model in MODEL_CATALOG]
         if getattr(sys, 'frozen', False):
             helper = Path(sys._MEIPASS) / 'Dictate-Updater.exe'
             assert helper.is_file(), 'Native update helper was not packaged'
@@ -4753,7 +5442,8 @@ def _packaging_smoke_test(arguments):
                 assert stream.read(2) == b'MZ', 'Native update helper is not a Windows executable'
             report['updater'] = {'helper_sha256': _file_sha256(helper),
                                  'download_verification': 'GitHub digest + SHA256SUMS.txt',
-                                 'install_policy': 'confirmation_required'}
+                                 'install_policy': 'confirmation_required',
+                                 'progress': 'measured download bytes, separate persisted-file SHA-256, native installer file progress'}
         long_digits = "005123456789" * 834
         long_words = " ".join(tuple(_SMALL_NUMBERS)[int(char)] for char in long_digits)
         assert normalize_dictation_text(long_words) == long_digits
@@ -4766,6 +5456,16 @@ def _packaging_smoke_test(arguments):
         assert len(dialog.findChildren(QKeySequenceEdit)) == 2
         dialog.tick.stop()
         dialog.close()
+        update_window = UpdateDialog()
+        update_window.set_state(dict(phase='downloading', percent=35, status='UI verification',
+                                     total=100*1048576, received=35*1048576, speed=2*1048576, eta=32.5))
+        assert update_window.progress.target == 35
+        assert '35.0 / 100.0 MiB' in update_window.transfer.text()
+        assert not update_window.primary.isVisible()
+        report['rounded_ui'] = {'settings_translucent': dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground),
+                                'updater_translucent': update_window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground),
+                                'measured_progress_bar': True}
+        update_window.close()
         # Import both runtime wrappers even if no model is supplied. Native
         # model runs below also catch missing/incompatible DLL dependencies.
         stage("loading native runtime wrappers")
@@ -4820,13 +5520,32 @@ def _packaging_smoke_test(arguments):
                     assert "country" in text.lower(), text
                     result['transcript'] = text
                     result['native_memory_before_unload'] = native_memory(process)
-                    # Exercise the actual manual/idle unload implementation, not
-                    # merely a direct adapter close; no audio/typing is pending.
+                    # Real native inference/worker teardown, with input delivery
+                    # deliberately mocked. No microphone or external typing.
                     engine.model, engine.model_info = session, info
+                    engine.unload_after_paste = True
+                    insertions = []
+                    def insert_for_test(value, generation=None):
+                        assert engine.model is session and engine.pending == 1 and engine.busy
+                        insertions.append(value)
+                        return True
+                    engine._type = insert_for_test
+                    completed = _RecordingSession(engine._capture_id, engine._model_generation)
+                    completed.parts.append((text, False))
+                    with engine._capture_lock:
+                        engine._pending_jobs += 1
                     started = time.monotonic()
-                    assert engine.unload(), 'Idle model unload was unexpectedly blocked'
+                    engine._seg_q.put(('finish', completed.generation, completed, None))
+                    deadline = time.monotonic() + 20
+                    while (engine.model is not None or engine.pending or engine.busy or engine._unloading) and time.monotonic() < deadline:
+                        time.sleep(.01)
                     result['unload_seconds'] = round(time.monotonic() - started, 4)
-                    assert engine.model is None
+                    assert len(insertions) == 1 and 'country' in insertions[0].lower()
+                    assert engine.model is None and engine.unload_reason == 'paste'
+                    assert engine._stream is None and not engine.listening and not engine.recording
+                    result['post_paste_unload_after_mocked_insertion'] = True
+                    result['insertions'] = len(insertions)
+                    result['microphone_opened'] = False
                     if process is not None:
                         assert not process.is_alive(), 'Native model worker survived unloading'
                         assert process.exitcode is not None

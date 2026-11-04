@@ -1,4 +1,4 @@
-"""Disposable Windows integration: v1.2.1 -> built installer, real native handoff.
+"""Disposable Windows integration: v1.2.2 -> built installer, real native handoff.
 
 Never run against a personal install. Uses an explicit temporary installation,
 scoped APPDATA, public hash-pinned previous installer, and restores the Run value.
@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,8 +17,8 @@ import tempfile
 import traceback
 import urllib.request
 
-OLD_URL = 'https://github.com/Comet-Suite/dictate-desktop/releases/download/v1.2.1/Dictate-Setup-1.2.1-x64.exe'
-OLD_SHA = 'ac260e1a1cdcb6b7677bcafcb2bc222d5f6f08e113486b8276a99ca32a9d375b'
+OLD_URL = 'https://github.com/Comet-Suite/dictate-desktop/releases/download/v1.2.2/Dictate-Setup-1.2.2-x64.exe'
+OLD_SHA = 'c6a240724c0087386815d1c0c904ddc7828e94ce843e99b574bd6c376156e224'
 RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 INSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{FCFDEEC6-10A9-41D4-9263-FEFD00F42E66}_is1'
 
@@ -39,7 +40,7 @@ def main():
     output=options.report.resolve();output.parent.mkdir(parents=True,exist_ok=True)
     directory=executable.parent
     assert ' ' in str(directory),'Use a disposable directory containing spaces.'
-    report={'status':'running','checks':[],'from_version':'1.2.1','reboot_performed':False}
+    report={'status':'running','checks':[],'from_version':'1.2.2','reboot_performed':False}
     def checkpoint(text):
         report['stage']=text;output.write_text(json.dumps(report,indent=2),encoding='utf-8')
         print('Updater test:',text,flush=True)
@@ -72,7 +73,7 @@ def main():
         assert executable.is_file() and installer.is_file() and helper.is_file()
         expected_executable_sha=sha256(executable)
         target_version=installed('DisplayVersion')
-        assert target_version!='1.2.1',target_version
+        assert target_version!='1.2.2',target_version
         report['to_version']=target_version
         with tempfile.TemporaryDirectory(prefix='Dictate Update Test ') as temporary:
             temporary=Path(temporary)
@@ -81,15 +82,15 @@ def main():
             # The native helper is outside the installation, exactly as in production.
             launch=temporary/'External updater';launch.mkdir()
             copied_helper=launch/helper.name;shutil.copy2(helper,copied_helper)
-            previous=temporary/'Dictate-Setup-1.2.1-x64.exe'
+            previous=temporary/'Dictate-Setup-1.2.2-x64.exe'
             checkpoint('downloading hash-pinned previous installer')
             request=urllib.request.Request(OLD_URL,headers={'User-Agent':'Dictate-Upgrade-Verification'})
             with urllib.request.urlopen(request,timeout=90) as response,previous.open('wb') as out:
                 while block:=response.read(1024*1024):out.write(block)
             assert sha256(previous)==OLD_SHA,'Previous installer checksum mismatch'
-            passed('published_v121_installer_sha256_verified')
+            passed('published_v122_installer_sha256_verified')
             run([previous,'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',f'/DIR={directory}'],environment)
-            assert installed('DisplayVersion')=='1.2.1'
+            assert installed('DisplayVersion')=='1.2.2'
             assert sha256(executable)!=expected_executable_sha
             passed('real_previous_version_installed_in_existing_custom_directory')
             model_directory=temporary/'Existing model library';model_directory.mkdir()
@@ -108,13 +109,13 @@ def main():
             bad=subprocess.run([str(copied_helper),str(os.getpid()),str(installer),str(directory),'0'*64,'--quiet'],
                                env=environment,capture_output=True,timeout=20)
             assert bad.returncode==4,bad.returncode
-            assert installed('DisplayVersion')=='1.2.1'
+            assert installed('DisplayVersion')=='1.2.2'
             passed('native_helper_rejects_tampered_checksum_before_installation')
             parent=subprocess.Popen([sys.executable,'-c','import sys; sys.stdin.buffer.read()'],stdin=subprocess.PIPE,env=environment)
             handoff=None
             try:
                 checkpoint('starting verified handoff while parent is still alive')
-                handoff=subprocess.Popen([str(copied_helper),str(parent.pid),str(installer),str(directory),new_sha,'--quiet'],
+                handoff=subprocess.Popen([str(copied_helper),str(parent.pid),str(installer),str(directory),new_sha,'--verify-progress'],
                                          cwd=str(launch),env=environment)
                 try:
                     handoff.wait(timeout=1)
@@ -122,7 +123,7 @@ def main():
                 except subprocess.TimeoutExpired:
                     pass
                 assert parent.poll() is None,'Helper killed the parent instead of waiting'
-                assert installed('DisplayVersion')=='1.2.1'
+                assert installed('DisplayVersion')=='1.2.2'
                 passed('helper_waits_for_parent_without_terminating_it')
                 parent.stdin.close();parent.wait(timeout=10)
                 code=handoff.wait(timeout=300);report['helper_exit_code']=code
@@ -132,6 +133,11 @@ def main():
             finally:
                 if parent.poll() is None:parent.kill();parent.wait(timeout=10)
                 if handoff is not None and handoff.poll() is None:handoff.kill();handoff.wait(timeout=10)
+            log=(launch/'installer.log').read_text(encoding='utf-8-sig',errors='replace')
+            assert re.search(r'(?i)(?:^|\s)/SILENT(?:\s|$)',log), 'Native file-progress mode was not used'
+            assert '/VERYSILENT' not in log.upper()
+            report['native_install_progress_mode']='real Inno /SILENT file progress; production path'
+            passed('native_installer_real_progress_mode_verified_from_installer_log')
             assert installed('DisplayVersion')==target_version
             assert Path(installed('InstallLocation')).resolve()==directory
             assert sha256(executable)==expected_executable_sha

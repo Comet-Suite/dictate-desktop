@@ -25,20 +25,22 @@ Dictate turns speech into text in the application you are already using. Click i
 - **Natural amounts and symbols.** Say “four hundred dollars” or “400 rupees”; get `$400` or `₹400`. Percentages, numeric expressions, spoken email addresses, and 167 explicit symbols are supported.
 - **Two independent global shortcuts.** One controls pop-up visibility; the other starts and commits dictation.
 - **Editable custom symbols.** Map spoken phrases to literal symbols/text in a UTF-8 `.txt` file; save and reload without rebuilding. Say “enter” for a newline in the text.
-- **Memory on demand.** Unload a model immediately or after 5/10/15 idle minutes; Windows releases the native model worker’s entire address space.
+- **Memory on demand.** Unload after pasting, manually or after 5/10/15 idle minutes; preload by showing the popup without recording. Windows releases the native model worker’s entire address space.
 - **Consent-based updates.** Download and verify newer stable releases automatically, then ask before an in-place installation and restart.
 - **A compact desktop companion.** Moveable pop-up, microphone meter, light/dark settings, model downloads, and idle unloading.
 
 <p align="center"><img src="assets/settings.png" width="1000" alt="Dictate settings showing the two shortcuts and model controls"></p>
 
-## 1.2.2: new logo, same dictation
+## What’s new in 1.2.3
 
-This release updates the supplied logo in the app/tray/taskbar, Windows executable/installer/shortcuts, and repository branding. Dictation, layout, settings and updater behavior are unchanged. On **1.2.1**, choose **Check for updates** in the tray or Settings, then approve **Install and restart** when the verified 1.2.2 download is ready.
+Version **1.2.3** adds measured updater progress, optional post-paste model unloading and popup preloading, a clearer supported-model catalog, and consistent rounded controls. The existing three-column settings layout, capsule popup, colors and supplied logo are retained.
+
+Both new model options are **on by default**, including when upgrading existing settings. They can be disabled independently in **Settings → Speech model**. Showing the popup preloads only; it never starts recording.
 
 ## Install on Windows
 
 1. Open the **[latest release](https://github.com/Comet-Suite/dictate-desktop/releases/latest)**.
-2. Download `Dictate-Setup-1.2.2-x64.exe` and run it.
+2. Download `Dictate-Setup-1.2.3-x64.exe` and run it.
 3. Open **Dictate** from the Start menu.
 4. In **Settings → Speech model**, download a supported model or select a compatible `.gguf` file.
 5. Wait for the model to load, then click into the text box where you want your words.
@@ -51,6 +53,12 @@ The installer includes Python and both speech runtimes. **You do not need to ins
 
 A portable ZIP is also provided. Extract the entire archive before running `Dictate.exe`; do not move the executable out of its folder.
 
+## Updater and model details
+
+<p align="center"><img src="assets/updater.png" width="520" alt="Rounded updater progress interface"></p>
+<p align="center"><em>Updater interface preview; transfer values are illustrative, not a claim that a future release exists.</em></p>
+<p align="center"><img src="assets/models.png" width="680" alt="Supported model catalog with variants and licenses"></p>
+
 ## Start with Windows
 
 Enable **Settings → Start on startup**. Dictate will start automatically when **your Windows account signs in**. This remains opt-in; an existing disabled preference is not changed.
@@ -59,13 +67,13 @@ The app checks its saved startup preference on a manual launch. The installer al
 
 If Windows still prevents startup, check **Windows Settings → Apps → Startup → Dictate** (or Task Manager → Startup apps) and enable it there. Dictate does not bypass Windows startup-app restrictions or administrator policies. Windows can delay startup applications while sign-in completes.
 
-To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.2** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
+To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.3** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
 
 ## Record, pause, finish
 
 | Shortcut | Default | Action |
 |---|---|---|
-| Show / hide | `Ctrl` + `Alt` + `D` | Toggle the floating pop-up |
+| Show / hide | `Ctrl` + `Alt` + `D` | Toggle the floating pop-up; preload its selected model when showing it (if enabled). No recording. |
 | Dictation | `Ctrl` + `Alt` + `Space` | First press: record. Second press: insert the complete recording. |
 
 Both shortcuts are configurable in Settings. Existing two-shortcut settings are preserved. If you used the single-shortcut build, its recording key is retained and the default show/hide key is restored.
@@ -109,22 +117,32 @@ Natural transformations use context rather than blindly changing every “at”,
 
 ## Choose a model
 
-| Model family | Runtime | Recommended repository |
-|---|---|---|
-| **Parakeet Unified English 0.6B** | transcribe.cpp | [`handy-computer/parakeet-unified-en-0.6b-gguf`](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf) |
-| **Parakeet TDT 0.6B v3** | CrispASR | [`cstr/parakeet-tdt-0.6b-v3-GGUF`](https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF) |
+The picker uses readable names and offers only formats present in that model’s curated revision. **Supported models / details** shows languages, runtime, available downloads, license links and the exact release-test variants.
 
-For Unified, `Q4_K_M` is a good low-memory starting point. The selector also exposes additional quantizations such as `Q5_K_M`, `Q6_K` and `Q8_0` where the repository provides them. A requested quantization is never silently replaced with a different, larger download. “Any” prefers known low-memory variants. Missing or unlabeled variants require another choice or an explicit local file. Larger quantizations use more memory. Dictate inspects GGUF metadata to select the matching runtime; renaming an incompatible file will not convert it.
+| Curated model | Language coverage | Runtime | Low-memory starting point |
+|---|---|---|---|
+| **Parakeet Unified English 0.6B** | English | transcribe.cpp / RNN-T | Q4_K_M · 477 MB |
+| **Parakeet TDT 0.6B v3** | 25 European languages, including English | CrispASR / TDT | Q4_K · 418 MB |
+| **Orukeet** | 25 European languages, including English | CrispASR / TDT | Q4_K · 402 MB |
+| **Phonon-2** | English | CrispASR / TDT | Q4_K · 402 MB |
+| **Parakeet Redux** | Multilingual; see model card | CrispASR / TDT | Q4_K · 402 MB |
 
-The settings status shows architecture, detected quantization and **file size** (not a promised RAM footprint). GGUF quantization metadata differs between CrispASR and Unified and is interpreted per runtime. Adding a filename/quantization label does not make an unsupported native architecture compatible.
+These are **download sizes, not RAM promises**. Model weights have separate licenses. See **[the full model catalog](docs/MODELS.md)** for repositories, formats, pinned revisions, release fixtures and limitations. English number/symbol commands remain English; listing a multilingual ASR model does not make those commands language-aware.
 
-Use **Unload now** in Settings or **Unload model now** in the tray to release model RAM immediately when no dictation/loading is active. The existing Never/5/10/15-minute idle choices remain. On Windows the isolated native worker is stopped, releasing its weights, scratch buffers and allocator caches. The next dictation shortcut reloads the selected model, then starts recording. Settings microphone monitoring may retain its small input stream; unloading does not claim the entire application's RAM becomes zero.
+Curated downloads are pinned to the catalog’s tested revision. A requested quantization is never silently replaced with a different, larger file. Custom repository IDs and compatible local `.gguf` files remain available, but arbitrary speech/LLM GGUF architectures are not automatically supported. Dictate inspects metadata to select the correct native runtime; renaming a file cannot convert it. The loaded status shows architecture, quantization and file size.
 
-Model weights have their own licenses. Read the selected model's license before use or redistribution.
+### Model memory and preloading
+
+- **Unload after pasting — on by default:** after Dictate successfully sends the complete insertion, release the model and its native worker. It does not unload during a recording, queued transcription/paste, or model loading. An empty/failed insertion does not trigger it.
+- **Preload when opening pop-up — on by default:** opening the popup via Show / Hide or the tray preloads the selected local model in the background. It never starts recording. With this enabled, startup does not eagerly load the saved model; merely hiding an already-visible popup does not preload.
+- The **dictation shortcut** remains separate. It can reload an unloaded model and then record after your explicit Start request. Press again during loading to cancel that recording intent.
+- **Unload now** and the existing **Never / 5 / 10 / 15-minute** idle choices remain independent.
+
+Both new switches can be turned off independently; explicitly saved choices are preserved. Unloading after a legacy automatic-mode phrase also turns listening off—disable post-paste unloading if you want continuous microphone listening. Settings’ small microphone level-monitor stream is separate from the model’s native memory. No “zero total app RAM” guarantee is made.
 
 ## Release updates
 
-**Version 1.2.0 must be upgraded manually once; it has no updater.** From 1.2.1, automatic stable-release checks/downloads are on by default and can be switched off. Downloads are SHA-256 checked against both GitHub's asset digest and the release manifest. You are asked before Dictate closes, installs into the existing folder and restarts. Active recording, pending transcription and loading defer the question; settings and model files are retained. Microsoft Store/WindowsApps paths are not overwritten. [Update behavior, verification and limitations →](docs/UPDATES.md)
+**Version 1.2.0 must be upgraded manually once; it has no updater.** From 1.2.1 onward, automatic stable-release checks/downloads are on by default and can be switched off. **1.2.3** adds a rounded progress window and Settings progress bar with real transferred bytes, speed/ETA, a separate SHA-256 stage, cancel and retry. After approval, the native installer displays actual installation progress and restarts Dictate. Downloads are SHA-256 checked against both GitHub's asset digest and the release manifest. You are asked before Dictate closes, installs into the existing folder and restarts. Active recording, pending transcription and loading defer the question; settings and model files are retained. Microsoft Store/WindowsApps paths are not overwritten. [Update behavior, verification and limitations →](docs/UPDATES.md)
 
 ## Privacy and local data
 
@@ -156,7 +174,7 @@ The application source remains a **single Python file**. Its logo is embedded, s
 
 ```powershell
 python -m pip install -r requirements-build.txt
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.0
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.3
 ```
 
 See **[Windows build instructions](docs/BUILDING.md)** for Inno Setup prerequisites, smoke tests, dependency notices, and release verification. Tagged releases are built on Windows through GitHub Actions, tested after installation, and published with checksums.

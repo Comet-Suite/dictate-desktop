@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "1.2.2",
+    [string]$Version = "1.2.3",
     [switch]$TestNativeModels,
     [switch]$TestInstaller
 )
@@ -19,7 +19,7 @@ function Run-Smoke {
     param([string]$Exe, [string]$Report, [switch]$Native)
     $Arguments = "--packaging-smoke-test `"$Report`""
     if ($Native) {
-        $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --model `"$Root\.ci-models\unified-q5_k_m.gguf`" --model `"$Root\.ci-models\tdt-q8_0.gguf`" --model `"$Root\.ci-models\unified.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
+        $Arguments += " --model `"$Root\.ci-models\unified.gguf`" --model `"$Root\.ci-models\tdt.gguf`" --model `"$Root\.ci-models\unified-q5_k_m.gguf`" --model `"$Root\.ci-models\tdt-q8_0.gguf`" --model `"$Root\.ci-models\orukeet.gguf`" --model `"$Root\.ci-models\phonon2.gguf`" --model `"$Root\.ci-models\redux.gguf`" --model `"$Root\.ci-models\unified.gguf`" --audio `"$Root\.ci-models\jfk.wav`""
     }
     $Process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput "$Report.stdout.log" -RedirectStandardError "$Report.stderr.log"
     if (-not $Process.WaitForExit(240000)) {

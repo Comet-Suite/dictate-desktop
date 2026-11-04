@@ -15,22 +15,22 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements-build.txt
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.2
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.3
 ```
 
 Outputs are written to `release/`. No model weights are embedded in the installer.
 
 ## Automated release
 
-Pushing a tag such as `v1.2.2` starts `.github/workflows/windows-release.yml`:
+The full Linux regression suite gates Windows build/publication. Pushing a tag such as `v1.2.3` starts `.github/workflows/windows-release.yml`:
 
 1. Install the pinned build dependencies on a Windows runner.
 2. Compile the native installer handoff helper, then build and collect native libraries and dependency notices.
-3. Download revision/hash-pinned Unified Q4_K_M/Q5_K_M, TDT Q4_K/Q8_0, and sample audio.
-4. Verify the frozen executable through Unified → Crisp → additional quantizations → Unified inference. Measure worker memory and verify that actual Engine.unload stops each native process.
+3. Download revision/hash-pinned Unified Q4_K_M/Q5_K_M, TDT Q4_K/Q8_0, Orukeet/Phonon-2/Redux Q4_K, and sample audio.
+4. Verify the frozen executable through Unified → Crisp → additional quantizations → Unified inference. Measure worker memory and verify post-paste unload after a completed insertion **with input delivery mocked**, stopping each actual native process. No microphone/external typing occurs in this fixture.
 5. Build the installer and install it silently into a clean temporary directory.
 6. Smoke-test the installed executable, including embedded branding and both shortcut controls.
-7. Test a real hash-verified 1.2.1-to-new-version in-place upgrade, native checksum rejection/parent wait/restart, and preserved settings, selected model and custom mappings.
+7. Test a real hash-verified 1.2.2-to-new-version in-place upgrade, native checksum rejection/parent wait/restart, and preserved settings, selected model and custom mappings.
 8. Verify real HKCU startup registration, launch the exact registered command from System32, and test preference-preserving reinstalls and uninstall cleanup.
 9. Create a portable ZIP, SHA-256 checksums and publish or update the selected GitHub release.
 
@@ -58,7 +58,7 @@ When replacing an older pinned shortcut, unpin it and pin the newly installed ap
 ## Verification and signing
 
 ```powershell
-Get-FileHash .\release\Dictate-Setup-1.2.2-x64.exe -Algorithm SHA256
+Get-FileHash .\release\Dictate-Setup-1.2.3-x64.exe -Algorithm SHA256
 ```
 
 Compare this output with `SHA256SUMS.txt` from the same release. The initial release is **unsigned**. A hash is an integrity check, not an Authenticode signature.
@@ -71,20 +71,20 @@ On Windows, the two speech runtimes contain incompatible DLLs with the same name
 
 ## Windows startup verification
 
-`python tools/check_windows_startup.py --exe "PATH WITH SPACES\Dictate.exe" --installer "PATH\Dictate-Setup-1.2.2-x64.exe" --report startup.json` checks the real per-user Run registry value on Windows. Use a disposable installed test copy: the test reinstalls it and finally uninstalls it. Other startup entries and Windows StartupApproved/policy settings are not modified; the prior Dictate Run value is restored.
+`python tools/check_windows_startup.py --exe "PATH WITH SPACES\Dictate.exe" --installer "PATH\Dictate-Setup-1.2.3-x64.exe" --report startup.json` checks the real per-user Run registry value on Windows. Use a disposable installed test copy: the test reinstalls it and finally uninstalls it. Other startup entries and Windows StartupApproved/policy settings are not modified; the prior Dictate Run value is restored.
 
 The test executes the registered command from System32 with the packaged smoke-test argument, rather than assuming a successful registry write means a valid launch command. It checks both saved enabled and saved disabled preferences through silent reinstall. Results are embedded in `smoke-installed.json`. It does **not** reboot the runner or claim a physical sign-in test.
 
 `Dictate.exe --sync-startup` is an internal installer command: it applies the existing saved preference and exits without creating the GUI or opening a microphone. A Run entry adds `--startup`; logon launches skip registry repair so they do not modify the Run key while Windows processes it.
 
-Publish **v1.2.2 as a new release**; do not move the completed v1.2.0/v1.2.1 tags or replace its assets. Never publish before the Windows verification succeeds.
+Publish **v1.2.3 as a new release**; do not move completed v1.2.0/v1.2.1/v1.2.2 tags or replace their assets. Never publish before the Windows verification succeeds.
 
 Registry behavior follows [Microsoft's Run/RunOnce documentation](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys). Windows startup-app controls are documented in [Microsoft Support](https://support.microsoft.com/en-us/windows/experience/startup-boot/configure-startup-applications-in-windows).
 
 ## Native update helper
 
-`packaging/updater.cpp` builds a small Windows GUI executable with MSVC `/MT`. `build.ps1` compiles it before PyInstaller; `Dictate.spec` bundles it plus its GPL source. The app copies it outside the install tree only after consent. It verifies SHA-256 through Windows BCrypt while holding a read/no-write-delete-sharing handle, waits for the parent PID, runs Inno with an explicit existing `/DIR` and no forced app closure, and restarts the updated installed executable.
+`packaging/updater.cpp` builds a small Windows GUI executable with MSVC `/MT`. `build.ps1` compiles it before PyInstaller; `Dictate.spec` bundles it plus its GPL source. The app copies it outside the install tree only after consent. It verifies SHA-256 through Windows BCrypt while holding a read/no-write-delete-sharing handle, waits for the parent PID, runs Inno with visible real file progress and an explicit existing `/DIR` and no forced app closure, and restarts the updated installed executable.
 
-`tools/check_windows_update.py` is destructive **only to the disposable copy passed to it**. It downloads the final hash-pinned published v1.2.1 installer, installs that older copy into the explicit test directory, scopes APPDATA, tests a blocked bad hash and parent wait, then performs the new installation and verifies restart plus preferences/files. It restores the user's prior Dictate Run value. Its `--quiet` helper flag suppresses error message boxes in CI; production handoff does not use that flag.
+`tools/check_windows_update.py` is destructive **only to the disposable copy passed to it**. It downloads the final hash-pinned published v1.2.2 installer, installs that older copy into the explicit test directory, scopes APPDATA, tests a blocked bad hash and parent wait, then performs the new installation and verifies restart plus preferences/files. It restores the user's prior Dictate Run value. Its `--quiet` flag suppresses installer/error UI for negative tests. `--verify-progress` suppresses only error message boxes while exercising production /SILENT progress; the integration test checks the actual installer command in its log. Production handoff uses neither flag.
 
 See `docs/UPDATES.md` for update policy and security limits. Network/release/consent decision tests are mocked unit tests; Windows handoff/in-place installation is a separate real integration test. Neither claims a physical reboot or microphone recording.
