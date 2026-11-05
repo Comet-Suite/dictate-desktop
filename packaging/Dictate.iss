@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: GPL-3.0-only
 #ifndef AppVersion
-  #define AppVersion "1.2.3"
+  #define AppVersion "1.2.4"
 #endif
 #define AppName "Dictate"
 #define AppExeName "Dictate.exe"

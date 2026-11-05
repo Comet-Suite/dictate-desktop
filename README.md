@@ -31,7 +31,16 @@ Dictate turns speech into text in the application you are already using. Click i
 
 <p align="center"><img src="assets/settings.png" width="1000" alt="Dictate settings showing the two shortcuts and model controls"></p>
 
-## What’s new in 1.2.3
+## Fixed in 1.2.4: readable update dialogs
+
+The updater now sets explicit text, background and control palettes for **active, inactive and disabled** states rather than inheriting a potentially conflicting Windows/Qt palette. Secondary text and action buttons have stronger contrast in both themes. Changing Dark mode also refreshes an already-open updater window.
+
+The release tests render the real dialog in **both light and dark themes against deliberately black-on-black and white-on-white application palettes**. Small text and button states are checked against a 4.5:1 contrast floor; the existing rounded layout, logo and installation-consent rules are retained. Dictation and model behavior are unchanged from 1.2.3.
+
+<p align="center"><img src="assets/updater-confirm-dark.png" width="520" alt="Readable dark update confirmation"><br><img src="assets/updater-confirm-light.png" width="520" alt="Readable light update confirmation"></p>
+<p align="center"><em>Confirmation-interface previews; no installation was performed to capture these images.</em></p>
+
+## Features introduced in 1.2.3
 
 Version **1.2.3** adds measured updater progress, optional post-paste model unloading and popup preloading, a clearer supported-model catalog, and consistent rounded controls. The existing three-column settings layout, capsule popup, colors and supplied logo are retained.
 
@@ -40,7 +49,7 @@ Both new model options are **on by default**, including when upgrading existing 
 ## Install on Windows
 
 1. Open the **[latest release](https://github.com/Comet-Suite/dictate-desktop/releases/latest)**.
-2. Download `Dictate-Setup-1.2.3-x64.exe` and run it.
+2. Download `Dictate-Setup-1.2.4-x64.exe` and run it.
 3. Open **Dictate** from the Start menu.
 4. In **Settings → Speech model**, download a supported model or select a compatible `.gguf` file.
 5. Wait for the model to load, then click into the text box where you want your words.
@@ -67,7 +76,7 @@ The app checks its saved startup preference on a manual launch. The installer al
 
 If Windows still prevents startup, check **Windows Settings → Apps → Startup → Dictate** (or Task Manager → Startup apps) and enable it there. Dictate does not bypass Windows startup-app restrictions or administrator policies. Windows can delay startup applications while sign-in completes.
 
-To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.3** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
+To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.4** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
 
 ## Record, pause, finish
 
@@ -174,7 +183,7 @@ The application source remains a **single Python file**. Its logo is embedded, s
 
 ```powershell
 python -m pip install -r requirements-build.txt
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.3
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.4
 ```
 
 See **[Windows build instructions](docs/BUILDING.md)** for Inno Setup prerequisites, smoke tests, dependency notices, and release verification. Tagged releases are built on Windows through GitHub Actions, tested after installation, and published with checksums.

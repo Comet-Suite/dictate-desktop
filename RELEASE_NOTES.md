@@ -1,20 +1,18 @@
-# Dictate 1.2.3
+# Dictate 1.2.4
 
-A smoother updater, deliberate model-memory controls, and a clearer model catalog—without rearranging the familiar app.
+## Fix: updater text visibility
 
-## What’s new
+- Explicit foreground/background/control palettes prevent the updater from inheriting unreadable Windows/Qt color combinations.
+- Active, inactive and disabled states are covered in both light and dark themes.
+- Stronger secondary-text and action-button contrast; an open updater follows the app’s theme switch immediately.
+- Automated rendering checks deliberately supply black-on-black and white-on-white application palettes. Text and button states must meet a 4.5:1 contrast floor.
 
-- **Visible update progress:** animated, measured download progress in Settings and a dedicated rounded window; transferred size, speed and estimated time; a separate persisted-file SHA-256 verification stage; cancellation and retry. Installation still requires explicit **Install and restart** approval. The native installer then displays real file-install progress.
-- **Unload after pasting:** release model/native-worker memory after a successful completed insertion, never while recording, loading or processing pending work.
-- **Preload when opening the popup:** Show / Hide preloads the selected model without starting recording. With this enabled the model is not eagerly loaded at startup. Dictation remains on its own shortcut.
-- **Both new model switches are enabled by default**, including for existing settings. Each can be disabled independently. Existing idle timers and manual unload remain.
-- **Supported-model listing:** readable names, languages, runtime, exact available formats/download sizes, pinned curated revisions, license links and clearly identified release-test variants. Custom repositories and local compatible GGUF files remain available.
-- **Rounded polish:** consistent rounded cards, controls, progress and dialogs, retaining the current three-column layout, capsule popup, colors and supplied logo.
+The existing rounded layout, supplied logo, update progress, SHA-256 verification, **Install and restart / Later** confirmation, and recording-safety guards are retained. Dictation, the model catalog and unload/preload behavior are unchanged from 1.2.3.
 
 ## Upgrade
 
-On **1.2.1 or 1.2.2**, choose **Check for updates** in the tray or Settings, then approve **Install and restart** after the verified download. The old client necessarily uses its existing updater UI for this one upgrade; the new progress interface is part of 1.2.3 for subsequent updates.
+Choose **Check for updates**, then approve **Install and restart**. Preferences, shortcuts, custom mappings, downloaded models, startup preference and the registered installation folder are retained.
 
-Settings, shortcuts, Auto Enter, custom mappings, selected models, downloaded model files, startup preference and the registered installation directory are retained. Version 1.2.0 needs a manual installer upgrade once. Installers are unsigned; verify official downloads against `SHA256SUMS.txt`.
+An already-running older app draws its existing prompt until the update finishes and it restarts. If that old prompt is unreadable, its **Install and restart** button still starts the verified update, or quit Dictate and run the official 1.2.4 installer manually into the existing folder. The fixed palette is active after restarting into 1.2.4.
 
-No microphone audio or transcripts are uploaded by release checks or model downloads. Existing explicit Start/Stop sessions, one bulk paste, spoken newlines, leading-zero number handling and native-runtime isolation are retained.
+The installer is unsigned. Use official release downloads and verify `SHA256SUMS.txt`. No physical reboot or microphone recording is claimed by the automated checks.

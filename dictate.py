@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Comet-Suite
 # Distributed under GPL-3.0; see LICENSE. No warranty.
 """
-Dictate 1.2.3  -  system-wide offline dictation
+Dictate 1.2.4  -  system-wide offline dictation
 PyQt6 UI + NVIDIA Parakeet Unified / TDT GGUF (local CPU runtimes)
 
 Install:
@@ -99,12 +99,12 @@ import numpy as np
 from PyQt6.QtCore import (QEasingCurve, QEvent, QMimeData, QObject, QPoint, QPointF, QPropertyAnimation, QRectF,
                           QSharedMemory, QThread, Qt, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QKeySequence, QPainter, QPen,
-                         QDesktopServices, QPixmap, QPolygonF, QTextCursor)
+                         QDesktopServices, QPixmap, QPolygonF, QTextCursor, QPalette, QImage)
 from PyQt6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
                              QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QMenu, QPlainTextEdit,
                              QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget)
 
-APP_NAME, VERSION = "Dictate", "1.2.3"
+APP_NAME, VERSION = "Dictate", "1.2.4"
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 SETTINGS_FILE = APP_DIR / "settings.json"
 DEFAULTS = {"dark_mode": True, "start_on_startup": False, "model_path": "",
@@ -3974,6 +3974,119 @@ class SmoothProgressBar(QProgressBar):
         self.anim.start()
 
 
+def _update_dialog_colors(dark):
+    """Readable updater colors; do not depend on Windows' ambient Qt palette."""
+    colors = palette(bool(dark))
+    # Small text and disabled controls remain legible, including inactive windows.
+    colors['sub'] = '#b4b4c0' if dark else '#545461'
+    colors['action'] = '#8d2ab2'
+    colors['action_hover'] = '#9e36c4'
+    return colors
+
+
+def _apply_update_dialog_theme(window, dark):
+    colors = _update_dialog_colors(dark)
+    native = QPalette(window.palette())
+    roles = {
+        'Window': colors['bg'], 'WindowText': colors['text'],
+        'Base': colors['input'], 'AlternateBase': colors['card'],
+        'Text': colors['text'], 'Button': colors['input'], 'ButtonText': colors['text'],
+        'BrightText': colors['text'], 'ToolTipBase': colors['card'], 'ToolTipText': colors['text'],
+        'PlaceholderText': colors['sub'], 'Highlight': colors['action'], 'HighlightedText': '#ffffff',
+        'Link': colors['action'], 'LinkVisited': colors['action'],
+        'Light': colors['hover'], 'Midlight': colors['border'], 'Mid': colors['border'],
+        'Dark': colors['border'], 'Shadow': colors['bg'],
+    }
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+        for name, color in roles.items():
+            if group == QPalette.ColorGroup.Disabled and name in ('WindowText', 'Text', 'ButtonText'):
+                color = colors['sub']
+            native.setColor(group, getattr(QPalette.ColorRole, name), QColor(color))
+    window.setPalette(native)
+    # The outer window stays transparent only at its rounded corners. The
+    # content frame is opaque and every text/control state has explicit colors.
+    qss = _rounded_style(bool(dark)) + '''
+        QFrame#win {background:@bg@; color:@text@;}
+        QLabel {color:@text@;}
+        QLabel#sub {color:@sub@;}
+        QPushButton {background:@input@; color:@text@;}
+        QPushButton:hover {background:@hover@; color:@text@;}
+        QPushButton:disabled {background:@input@; color:@sub@;}
+        QPushButton#primary {background:@action@; color:#ffffff;}
+        QPushButton#primary:hover {background:@action_hover@; color:#ffffff;}
+        QPushButton#primary:disabled {background:@input@; color:@sub@;}
+        QToolTip {background:@card@; color:@text@; border:1px solid @border@; padding:6px;}
+    '''
+    for name, value in colors.items():
+        qss = qss.replace(f'@{name}@', value)
+    window.setStyleSheet(qss)
+    return colors
+
+
+def _color_contrast(foreground, background):
+    """WCAG relative luminance ratio for opaque sRGB UI colors."""
+    def luminance(value):
+        color = QColor(value)
+        channels = [color.redF(), color.greenF(), color.blueF()]
+        channels = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in channels]
+        return sum(v * weight for v, weight in zip(channels, (.2126, .7152, .0722)))
+    a, b = sorted((luminance(foreground), luminance(background)))
+    return (b + .05) / (a + .05)
+
+
+def _check_update_dialog_readability(application):
+    """Render the real dialog under hostile palettes; no download or install."""
+    original = QPalette(application.palette())
+    results = []
+    try:
+        for ambient in ('#000000', '#ffffff'):
+            hostile = QPalette(original)
+            for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+                for role in (QPalette.ColorRole.Window, QPalette.ColorRole.WindowText, QPalette.ColorRole.Base,
+                             QPalette.ColorRole.Text, QPalette.ColorRole.Button, QPalette.ColorRole.ButtonText):
+                    hostile.setColor(group, role, QColor(ambient))
+            application.setPalette(hostile)
+            for dark in (True, False):
+                window = UpdateDialog(dark=dark)
+                try:
+                    window.set_state(dict(phase='ready', percent=100, version=VERSION,
+                                          status='Downloaded and SHA-256 verified. Choose Install and restart or Later.'))
+                    window.show()
+                    application.processEvents()
+                    colors = window._theme_colors
+                    ratios = {'heading': _color_contrast(colors['text'], colors['bg']),
+                              'body': _color_contrast(colors['sub'], colors['bg']),
+                              'button': _color_contrast('#ffffff', colors['action']),
+                              'button_hover': _color_contrast('#ffffff', colors['action_hover']),
+                              'disabled_button': _color_contrast(colors['sub'], colors['input'])}
+                    assert min(ratios.values()) >= 4.5, ratios
+                    assert ratios['heading'] >= 7
+                    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+                        text = window.palette().color(group, QPalette.ColorRole.WindowText)
+                        assert _color_contrast(text, colors['bg']) >= 4.5
+                        assert text.alpha() == 255
+                    image = window.grab().toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+                    pixels = image.constBits().asstring(image.sizeInBytes())
+                    color = QColor(colors['text'])
+                    visible_text_pixels = pixels.count(bytes((color.red(), color.green(), color.blue(), 255)))
+                    assert visible_text_pixels > 10, 'Updater heading was not visibly rendered'
+                    assert image.pixelColor(0, 0).alpha() == 0, 'Rounded transparent corners changed'
+                    assert window.secondary.isDefault() and not window.primary.autoDefault()
+                    results.append({'theme': 'dark' if dark else 'light', 'ambient_palette': ambient,
+                                    'contrast_ratios': {key: round(value, 3) for key, value in ratios.items()},
+                                    'visible_text_pixels': visible_text_pixels,
+                                    'active_inactive_disabled_text': 'opaque and readable'})
+                finally:
+                    window.hide()
+                    window.deleteLater()
+                    application.processEvents()
+    finally:
+        application.setPalette(original)
+    return {'status': 'ok', 'rendered_cases': results, 'minimum_text_contrast': 4.5,
+            'installation_performed': False, 'microphone_opened': False}
+
+
+
 class UpdateDialog(QDialog):
     check_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
@@ -4051,7 +4164,7 @@ class UpdateDialog(QDialog):
         self.set_state(self._state)
 
     def set_theme(self, dark):
-        self.setStyleSheet(_rounded_style(dark))
+        self._theme_colors = _apply_update_dialog_theme(self, bool(dark))
 
     def set_state(self, state):
         self._state = dict(state)
@@ -5350,10 +5463,15 @@ class App:
         self.engine.load_model(path)
         self.say("Loading model...")
 
+    def _refresh_dialog_themes(self):
+        self.pill.update()
+        if self.update_dialog is not None:
+            self.update_dialog.set_theme(self.settings.get('dark_mode', True))
+
     def open_settings(self):
         if self.dialog is None:
             self.dialog = SettingsDialog(self.settings, self.engine)
-            self.dialog.theme_changed.connect(self.pill.update)
+            self.dialog.theme_changed.connect(self._refresh_dialog_themes)
             self.dialog.model_chosen.connect(self.choose_model)
             self.dialog.position_chosen.connect(self.go_to_preset)
             self.dialog.hotkey_changed.connect(self.set_hotkey)
@@ -5466,6 +5584,8 @@ def _packaging_smoke_test(arguments):
                                 'updater_translucent': update_window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground),
                                 'measured_progress_bar': True}
         update_window.close()
+        stage("rendering updater contrast in dark/light themes and hostile Windows-style palettes")
+        report["updater_readability"] = _check_update_dialog_readability(application)
         # Import both runtime wrappers even if no model is supplied. Native
         # model runs below also catch missing/incompatible DLL dependencies.
         stage("loading native runtime wrappers")

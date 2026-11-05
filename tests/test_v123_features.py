@@ -356,14 +356,14 @@ def test_progress_animation_is_measured_monotonic_and_phase_aware(qt):
 def test_update_dialog_closing_is_not_install_consent_and_buttons_are_safe(qt):
     window = m.UpdateDialog(); requested = []; window.install_requested.connect(lambda: requested.append(True))
     try:
-        window.set_state({'phase': 'downloading', 'percent': 35, 'status': 'Downloading', 'version': '1.2.4',
+        window.set_state({'phase': 'downloading', 'percent': 35, 'status': 'Downloading', 'version': '1.2.5',
                           'received': 35*1048576, 'total': 100*1048576, 'speed': 2*1048576, 'eta': 32.5})
         window.show(); pump(qt, 30)
         assert not window.primary.isVisible() and window.cancel.isVisible()
         assert '35.0 / 100.0 MiB' in window.transfer.text()
         assert '2.0 MiB/s' in window.transfer.text() and '33s left' in window.transfer.text()
         image = window.grab().toImage(); assert image.pixelColor(0, 0).alpha() == 0
-        window.set_state({'phase': 'ready', 'percent': 100, 'status': 'Verified', 'version': '1.2.4'})
+        window.set_state({'phase': 'ready', 'percent': 100, 'status': 'Verified', 'version': '1.2.5'})
         assert window.primary.text() == 'Install and restart' and window.secondary.isDefault()
         window.set_install_allowed(False); assert not window.primary.isEnabled()
         window.set_install_allowed(True); window.primary.click(); assert requested == [True]

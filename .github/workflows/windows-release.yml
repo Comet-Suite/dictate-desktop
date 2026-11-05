@@ -8,7 +8,7 @@ on:
       tag:
         description: Existing version tag to build
         required: true
-        default: v1.2.3
+        default: v1.2.4
 
 permissions:
   contents: write

@@ -2,7 +2,13 @@
 
 ## First upgrade from 1.2.0
 
-Version 1.2.0 has no built-in release updater. **Install the current version manually once**: finish dictation, quit the existing copy from the tray, run `Dictate-Setup-1.2.3-x64.exe`, and keep the existing installation directory. The Inno Setup application ID is unchanged, so previous installation location and preferences are retained.
+Version 1.2.0 has no built-in release updater. **Install the current version manually once**: finish dictation, quit the existing copy from the tray, run `Dictate-Setup-1.2.4-x64.exe`, and keep the existing installation directory. The Inno Setup application ID is unchanged, so previous installation location and preferences are retained.
+
+## Contrast patch: 1.2.3 → 1.2.4
+
+The updater has explicit native palettes and text/control colors in all window states. Secondary text and primary-button colors have stronger contrast, and changing Dark mode updates an open progress/confirmation window. Automated Qt rendering checks cover dark/light UI against deliberately unreadable inherited application palettes; frozen and installed Windows builds run the same checks.
+
+Choose **Check for updates → Install and restart**. If an old 1.2.1/1.2.2 confirmation has black-on-black text, the current running app still owns that window until restart. Use its Install and restart button or quit and run the official installer into the registered folder. Releasing a new package cannot repaint code already running in the old process.
 
 ## Feature update: 1.2.2 → 1.2.3
 
@@ -56,4 +62,4 @@ The updater uses the official repository and HTTPS, restricts asset redirects to
 
 Release checks contact GitHub; model downloads contact the selected model host. Neither operation uploads microphone audio or transcripts. Dictation remains local and works offline after the model is installed.
 
-The automated release pipeline tests real Windows installation, a hash-pinned 1.2.2-to-new-version upgrade through the native helper, in-place paths, preference/file preservation and restart. Unit tests separately exercise release parsing, blocked assets, failed verification, cancellation, consent and recording-safety decisions. This does not represent a physical reboot, a microphone test, or an already-performed upgrade to a future release.
+The automated release pipeline tests real Windows installation, a hash-pinned 1.2.3-to-new-version upgrade through the native helper, in-place paths, preference/file preservation and restart. Unit tests separately exercise release parsing, blocked assets, failed verification, cancellation, consent and recording-safety decisions. This does not represent a physical reboot, a microphone test, or an already-performed upgrade to a future release.

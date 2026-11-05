@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.4 — Updater contrast fix
+
+- Set explicit native Qt palettes for active, inactive and disabled updater text and controls to avoid black-on-black Windows theme combinations.
+- Increase secondary-text and action-button contrast in both themes; preserve the rounded layout, logo and existing update consent/safety policy.
+- Refresh an already-open updater when the app theme changes.
+- Add automated adversarial-palette rendering and contrast checks to source, frozen and installed Windows smoke tests.
+- No dictation, model lifecycle/catalog, shortcuts, insertion, settings or installer identity changes.
+
 ## [1.2.3] — Model controls and update progress
 
 ### Added

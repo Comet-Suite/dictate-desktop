@@ -39,7 +39,7 @@ def main():
         target = directory / name
         if not target.exists() or digest(target) != expected:
             print('Downloading', name, flush=True)
-            request = urllib.request.Request(url, headers={'User-Agent': 'Dictate-Packaging/1.2.3'})
+            request = urllib.request.Request(url, headers={'User-Agent': 'Dictate-Packaging/1.2.4'})
             temporary = target.with_suffix('.partial')
             with urllib.request.urlopen(request, timeout=120) as response, temporary.open('wb') as output:
                 while block := response.read(2 * 1024 * 1024):
