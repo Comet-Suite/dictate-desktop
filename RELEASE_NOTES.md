@@ -1,18 +1,29 @@
-# Dictate 1.2.4
+# Dictate 1.2.5
 
-## Fix: updater text visibility
+## Popup controls, without a redesign
 
-- Explicit foreground/background/control palettes prevent the updater from inheriting unreadable Windows/Qt color combinations.
-- Active, inactive and disabled states are covered in both light and dark themes.
-- Stronger secondary-text and action-button contrast; an open updater follows the app’s theme switch immediately.
-- Automated rendering checks deliberately supply black-on-black and white-on-white application palettes. Text and button states must meet a 4.5:1 contrast floor.
+- **Saved position lock, enabled by default.** Accidental drag gestures no longer move the popup or trigger a button on release. Normal microphone, pause, settings and close clicks still work. Choose a preset while locked, or unlock to drag deliberately.
+- **Tiny and Extra small** sizes alongside the existing Small, Medium and Large capsule sizes. All four controls retain usable hit targets.
+- **Live, saved appearance controls:** Purple/Blue/Green/Amber or a custom voice-bar color; 50–100% popup opacity; Subtle/Normal/Taller voice bars. Fade-in and hide/show preserve the chosen opacity.
 
-The existing rounded layout, supplied logo, update progress, SHA-256 verification, **Install and restart / Later** confirmation, and recording-safety guards are retained. Dictation, the model catalog and unload/preload behavior are unchanged from 1.2.3.
+## One model unload choice
+
+**Settings → Speech model → UNLOAD** now contains exactly:
+
+1. **5 minutes idle**
+2. **10 minutes idle**
+3. **15 minutes idle**
+4. **Never**
+5. **Immediately after pasting**
+
+This replaces the two unload/preload switches and manual unload control. Showing the popup still preloads the selected model **without recording**. Immediately releases the native model only after successful complete insertion, never during a recording, model loading or queued work. An enabled old post-paste setting migrates to Immediately; otherwise the existing idle choice is retained.
+
+## Preserved
+
+The landscape three-column settings layout, capsule design, supplied logo, model catalog/downloads, true Unified and CrispASR engines, both shortcuts, explicit whole-session insertion, Auto Enter preference, numbers/symbols/custom mappings, startup registration and updater protections are retained. The readable dark/light updater palettes from 1.2.4 remain in place.
 
 ## Upgrade
 
-Choose **Check for updates**, then approve **Install and restart**. Preferences, shortcuts, custom mappings, downloaded models, startup preference and the registered installation folder are retained.
+Choose **Check for updates**, then approve **Install and restart**, or quit Dictate and run `Dictate-Setup-1.2.5-x64.exe` from this release into the existing installation folder. Settings, custom mappings, shortcuts, model files and startup preference are retained; old memory-control settings are migrated to one policy.
 
-An already-running older app draws its existing prompt until the update finishes and it restarts. If that old prompt is unreadable, its **Install and restart** button still starts the verified update, or quit Dictate and run the official 1.2.4 installer manually into the existing folder. The fixed palette is active after restarting into 1.2.4.
-
-The installer is unsigned. Use official release downloads and verify `SHA256SUMS.txt`. No physical reboot or microphone recording is claimed by the automated checks.
+An already-running older app continues drawing its old interface until it restarts. The installer remains unsigned: use official downloads and verify `SHA256SUMS.txt`. Automated tests use synthetic popup/mouse/audio input where noted; no physical microphone recording or reboot is claimed.

@@ -1,4 +1,4 @@
-"""Disposable Windows integration: v1.2.3 -> built installer, real native handoff.
+"""Disposable Windows integration: v1.2.4 -> built installer, real native handoff.
 
 Never run against a personal install. Uses an explicit temporary installation,
 scoped APPDATA, public hash-pinned previous installer, and restores the Run value.
@@ -17,8 +17,8 @@ import tempfile
 import traceback
 import urllib.request
 
-OLD_URL = 'https://github.com/Comet-Suite/dictate-desktop/releases/download/v1.2.3/Dictate-Setup-1.2.3-x64.exe'
-OLD_SHA = 'd91d8c2b051ea32cdd4c1c8b22daa30a765427930b5d6d765de115b5e6e76417'
+OLD_URL = 'https://github.com/Comet-Suite/dictate-desktop/releases/download/v1.2.4/Dictate-Setup-1.2.4-x64.exe'
+OLD_SHA = '2ebf4ff4eaced3320b4c8b0802650ab6ac861535d9cfe903637905d5e50d5b81'
 RUN_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
 INSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{FCFDEEC6-10A9-41D4-9263-FEFD00F42E66}_is1'
 
@@ -40,7 +40,7 @@ def main():
     output=options.report.resolve();output.parent.mkdir(parents=True,exist_ok=True)
     directory=executable.parent
     assert ' ' in str(directory),'Use a disposable directory containing spaces.'
-    report={'status':'running','checks':[],'from_version':'1.2.3','reboot_performed':False}
+    report={'status':'running','checks':[],'from_version':'1.2.4','reboot_performed':False}
     def checkpoint(text):
         report['stage']=text;output.write_text(json.dumps(report,indent=2),encoding='utf-8')
         print('Updater test:',text,flush=True)
@@ -73,7 +73,7 @@ def main():
         assert executable.is_file() and installer.is_file() and helper.is_file()
         expected_executable_sha=sha256(executable)
         target_version=installed('DisplayVersion')
-        assert target_version!='1.2.3',target_version
+        assert target_version!='1.2.4',target_version
         report['to_version']=target_version
         with tempfile.TemporaryDirectory(prefix='Dictate Update Test ') as temporary:
             temporary=Path(temporary)
@@ -82,15 +82,15 @@ def main():
             # The native helper is outside the installation, exactly as in production.
             launch=temporary/'External updater';launch.mkdir()
             copied_helper=launch/helper.name;shutil.copy2(helper,copied_helper)
-            previous=temporary/'Dictate-Setup-1.2.3-x64.exe'
+            previous=temporary/'Dictate-Setup-1.2.4-x64.exe'
             checkpoint('downloading hash-pinned previous installer')
             request=urllib.request.Request(OLD_URL,headers={'User-Agent':'Dictate-Upgrade-Verification'})
             with urllib.request.urlopen(request,timeout=90) as response,previous.open('wb') as out:
                 while block:=response.read(1024*1024):out.write(block)
             assert sha256(previous)==OLD_SHA,'Previous installer checksum mismatch'
-            passed('published_v123_installer_sha256_verified')
+            passed('published_v124_installer_sha256_verified')
             run([previous,'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',f'/DIR={directory}'],environment)
-            assert installed('DisplayVersion')=='1.2.3'
+            assert installed('DisplayVersion')=='1.2.4'
             assert sha256(executable)!=expected_executable_sha
             passed('real_previous_version_installed_in_existing_custom_directory')
             model_directory=temporary/'Existing model library';model_directory.mkdir()
@@ -102,6 +102,8 @@ def main():
             settings={'dark_mode':False,'start_on_startup':False,'hotkey':'Ctrl+Alt+D','dict_hotkey':'Ctrl+Alt+Space',
                       'model_path':str(actual_model) if actual_model.is_file() else '',
                       'download_dir':str(model_directory),'unload_min':10,'auto_enter':False,'stop_mode':'manual',
+                      'unload_after_paste':False,'preload_on_popup':True,'size':'small',
+                      'position':'custom','pos':[180,120],
                       'custom_symbols_path':str(symbols),'check_updates':False,
                       'user_upgrade_sentinel':{'number':'005','keep':True}}
             settings_file=profile/'settings.json';settings_file.write_text(json.dumps(settings),encoding='utf-8')
@@ -109,7 +111,7 @@ def main():
             bad=subprocess.run([str(copied_helper),str(os.getpid()),str(installer),str(directory),'0'*64,'--quiet'],
                                env=environment,capture_output=True,timeout=20)
             assert bad.returncode==4,bad.returncode
-            assert installed('DisplayVersion')=='1.2.3'
+            assert installed('DisplayVersion')=='1.2.4'
             passed('native_helper_rejects_tampered_checksum_before_installation')
             parent=subprocess.Popen([sys.executable,'-c','import sys; sys.stdin.buffer.read()'],stdin=subprocess.PIPE,env=environment)
             handoff=None
@@ -123,7 +125,7 @@ def main():
                 except subprocess.TimeoutExpired:
                     pass
                 assert parent.poll() is None,'Helper killed the parent instead of waiting'
-                assert installed('DisplayVersion')=='1.2.3'
+                assert installed('DisplayVersion')=='1.2.4'
                 passed('helper_waits_for_parent_without_terminating_it')
                 parent.stdin.close();parent.wait(timeout=10)
                 code=handoff.wait(timeout=300);report['helper_exit_code']=code
@@ -153,6 +155,18 @@ def main():
             assert symbols.read_bytes()==symbols_bytes and model_proof.read_bytes()==model_bytes
             passed('settings_shortcuts_model_selection_and_custom_mappings_preserved')
             stop_copy(environment)
+            migrated_report=temporary/'migrated-popup.json'
+            run([executable,'--packaging-smoke-test',migrated_report],environment,120)
+            migrated=json.loads(migrated_report.read_text(encoding='utf-8'))
+            assert migrated['status']=='ok'
+            prefs=migrated['saved_popup_preferences']
+            assert prefs['unload_min']==10 and prefs['legacy_controls_removed']
+            assert prefs['popup_locked'] is True and prefs['size']=='small'
+            assert prefs['position']=='custom' and prefs['pos']==[180,120]
+            assert prefs['popup_opacity']==100 and prefs['voice_bar_height']=='normal'
+            assert json.loads(settings_file.read_text(encoding='utf-8'))==saved
+            report['migrated_popup_preferences']=prefs
+            passed('legacy_memory_policy_and_popup_position_migrate_without_overwriting_saved_preferences')
         report['status']='ok'
     except Exception:
         report['status']='error';report['error']=traceback.format_exc()

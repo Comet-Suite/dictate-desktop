@@ -220,16 +220,19 @@ def test_ipc_rejects_malformed_frames(monkeypatch,packet):
     assert pipe.sent[1][0]=='error';run.assert_not_called()
 
 
-def test_manual_unload_button_and_new_controls_stay_inside_columns(harness):
+def test_single_unload_and_requested_popup_controls_stay_inside_columns(harness):
     app,e,d,*_=harness
     d.resize(960,720);pump(app,50)
     scroll=d.findChild(QScrollArea)
-    for control in (d.btn_unload,d.symbol_path,d.updates_toggle):
+    for control in (d.unload,d.symbol_path,d.updates_toggle,d.position_lock,d.opacity,d.bar_color,d.bar_height):
         point=control.mapTo(scroll.widget(),QPoint(0,0))
         assert point.x()+control.width()<=scroll.widget().width()
-    e.recording=True;d._tick();assert not d.btn_unload.isEnabled()
-    e.recording=False;d._tick();assert d.btn_unload.isEnabled()
-    d.btn_unload.click();assert e.model is None
+    assert not hasattr(d,'btn_unload')
+    model=e.model
+    e.recording=True;d._tick()
+    d.unload.setCurrentIndex(d.unload.findData(-1))
+    assert e.model is model and not model.closed
+    e.recording=False
 
 
 def test_mapping_select_and_reload_are_persistent_without_recompiling(harness,tmp_path,monkeypatch):

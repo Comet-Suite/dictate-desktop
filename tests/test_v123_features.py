@@ -45,19 +45,22 @@ def test_unrelated_runtime_paths_still_match_released_v122(name):
     assert digest == PROTECTED[name], name
 
 
-def test_both_lifecycle_defaults_migrate_without_overwriting_old_preferences(tmp_path, monkeypatch):
+def test_legacy_lifecycle_preferences_migrate_to_the_single_unload_policy(tmp_path, monkeypatch):
     settings = tmp_path/'settings.json'
     monkeypatch.setattr(m, 'SETTINGS_FILE', settings)
     original = {'auto_enter': False, 'hotkey': 'Ctrl+Alt+D', 'dict_hotkey': 'Ctrl+Alt+Space',
                 'start_on_startup': True, 'model_path': 'existing.gguf', 'unload_min': 10}
     settings.write_text(json.dumps(original))
     loaded = m.load_settings()
-    assert loaded['unload_after_paste'] is True and loaded['preload_on_popup'] is True
     assert all(loaded[key] == value for key, value in original.items())
+    assert not {'unload_after_paste', 'preload_on_popup'} & loaded.keys()
     original.update(unload_after_paste=False, preload_on_popup=False)
     settings.write_text(json.dumps(original))
     loaded = m.load_settings()
-    assert not loaded['unload_after_paste'] and not loaded['preload_on_popup']
+    assert loaded['unload_min'] == 10 and loaded['popup_locked']
+    original['unload_after_paste'] = True
+    settings.write_text(json.dumps(original))
+    assert m.load_settings()['unload_min'] == -1
 
 
 @pytest.mark.parametrize('success,enabled', [(True, True), (False, True), (True, False), (None, True)])
@@ -150,7 +153,7 @@ def popup_app(e, path):
 
 
 @pytest.mark.parametrize('enabled', [True, False])
-def test_visibility_shortcut_preloads_without_recording(qt, tmp_path, enabled):
+def test_visibility_shortcut_always_preloads_without_recording(qt, tmp_path, enabled):
     e = Engine(); e.model.close(); e.model = None
     app = popup_app(e, tiny_gguf(tmp_path/'chosen.gguf'))
     app.settings['preload_on_popup'] = enabled
@@ -158,13 +161,13 @@ def test_visibility_shortcut_preloads_without_recording(qt, tmp_path, enabled):
     try:
         app.toggle_popup()
         assert app.pill.visible
-        assert e.load_model.call_count == int(enabled)
+        assert e.load_model.call_count == 1
         assert not e.recording and not e.listening and not app._dictation_after_load
         app.on_ready()
         assert not e.recording and not e.listening
         app.toggle_popup()
         assert not app.pill.visible
-        assert e.load_model.call_count == int(enabled)  # hiding never preloads
+        assert e.load_model.call_count == 1  # hiding never preloads
     finally:
         e.shutdown()
 
@@ -238,17 +241,17 @@ def test_catalog_never_substitutes_missing_or_undocumented_files():
     assert m._catalog_download_file(tdt['repo'], [name], 'f16') == name
 
 
-@pytest.mark.parametrize('key', ['unload_after_paste', 'preload_on_popup'])
-def test_lifecycle_switches_are_independent_persistent_and_live(qt, monkeypatch, key):
+@pytest.mark.parametrize('value', [5, 10, 15, 0, -1])
+def test_single_unload_dropdown_is_persistent_and_live(qt, monkeypatch, value):
     state = dict(m.DEFAULTS)
     monkeypatch.setattr(m, 'save_settings', Mock()); monkeypatch.setattr(m, 'list_input_devices', lambda: [])
     e = Engine(); d = m.SettingsDialog(state, e)
-    other = 'preload_on_popup' if key == 'unload_after_paste' else 'unload_after_paste'
     try:
-        assert getattr(d, key).isChecked()
-        getattr(d, key).setChecked(False)
-        assert state[key] is False and state[other] is True
-        assert e.unload_after_paste is state['unload_after_paste']
+        assert not hasattr(d, 'unload_after_paste') and not hasattr(d, 'preload_on_popup')
+        assert not hasattr(d, 'btn_unload')
+        d.unload.setCurrentIndex(d.unload.findData(0 if value == -1 else -1))
+        d.unload.setCurrentIndex(d.unload.findData(value))
+        assert state['unload_min'] == value and e.unload_after_paste is (value == -1)
         m.save_settings.assert_called()
     finally:
         d.tick.stop(); d.close(); e.shutdown(); d.deleteLater()
@@ -356,14 +359,14 @@ def test_progress_animation_is_measured_monotonic_and_phase_aware(qt):
 def test_update_dialog_closing_is_not_install_consent_and_buttons_are_safe(qt):
     window = m.UpdateDialog(); requested = []; window.install_requested.connect(lambda: requested.append(True))
     try:
-        window.set_state({'phase': 'downloading', 'percent': 35, 'status': 'Downloading', 'version': '1.2.5',
+        window.set_state({'phase': 'downloading', 'percent': 35, 'status': 'Downloading', 'version': '1.2.6',
                           'received': 35*1048576, 'total': 100*1048576, 'speed': 2*1048576, 'eta': 32.5})
         window.show(); pump(qt, 30)
         assert not window.primary.isVisible() and window.cancel.isVisible()
         assert '35.0 / 100.0 MiB' in window.transfer.text()
         assert '2.0 MiB/s' in window.transfer.text() and '33s left' in window.transfer.text()
         image = window.grab().toImage(); assert image.pixelColor(0, 0).alpha() == 0
-        window.set_state({'phase': 'ready', 'percent': 100, 'status': 'Verified', 'version': '1.2.5'})
+        window.set_state({'phase': 'ready', 'percent': 100, 'status': 'Verified', 'version': '1.2.6'})
         assert window.primary.text() == 'Install and restart' and window.secondary.isDefault()
         window.set_install_allowed(False); assert not window.primary.isEnabled()
         window.set_install_allowed(True); window.primary.click(); assert requested == [True]
@@ -437,12 +440,11 @@ def test_real_application_startup_and_visibility_flow_never_auto_record(qt, tmp_
     monkeypatch.setattr(m.Engine, '_sync_stream', lambda _: None)
     app = m.App()
     try:
-        assert len(calls) == (0 if preload else 1)
+        assert len(calls) == 0
         assert app.engine.unload_after_paste and not app.engine.recording and not app.engine.listening
-        if preload:
-            app.pill.hide_popup()
-            app.toggle_popup()
-            assert len(calls) == 1 and app.engine.loading
+        app.pill.hide_popup()
+        app.toggle_popup()
+        assert len(calls) == 1 and app.engine.loading
         app.engine.model = SimpleNamespace(close=lambda: None)
         app.engine.loading = False
         app.engine.model_ready.emit()

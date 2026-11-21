@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Comet-Suite
 # Distributed under GPL-3.0; see LICENSE. No warranty.
 """
-Dictate 1.2.4  -  system-wide offline dictation
+Dictate 1.2.5  -  system-wide offline dictation
 PyQt6 UI + NVIDIA Parakeet Unified / TDT GGUF (local CPU runtimes)
 
 Install:
@@ -100,17 +100,18 @@ from PyQt6.QtCore import (QEasingCurve, QEvent, QMimeData, QObject, QPoint, QPoi
                           QSharedMemory, QThread, Qt, QTimer, QUrl, pyqtProperty, pyqtSignal, pyqtSlot)
 from PyQt6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QKeySequence, QPainter, QPen,
                          QDesktopServices, QPixmap, QPolygonF, QTextCursor, QPalette, QImage)
-from PyQt6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
+from PyQt6.QtWidgets import (QAbstractButton, QApplication, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame,
                              QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QMenu, QPlainTextEdit,
-                             QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon, QVBoxLayout, QWidget)
+                             QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSystemTrayIcon, QVBoxLayout, QWidget)
 
-APP_NAME, VERSION = "Dictate", "1.2.4"
+APP_NAME, VERSION = "Dictate", "1.2.5"
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 SETTINGS_FILE = APP_DIR / "settings.json"
 DEFAULTS = {"dark_mode": True, "start_on_startup": False, "model_path": "",
             "position": "bottom_center", "pos": None, "hotkey": "Ctrl+Alt+D",
-            "mic": "", "download_dir": str(APP_DIR / "models"), "unload_min": 0, "size": "medium", "auto_enter": False, "pause_blocks": 8, "stop_mode": "auto", "dict_hotkey": "Ctrl+Alt+Space", "custom_symbols_path": "", "check_updates": True,
-            "unload_after_paste": True, "preload_on_popup": True}
+            "mic": "", "download_dir": str(APP_DIR / "models"), "unload_min": -1, "size": "medium", "auto_enter": False, "pause_blocks": 8, "stop_mode": "auto", "dict_hotkey": "Ctrl+Alt+Space", "custom_symbols_path": "", "check_updates": True,
+            "popup_locked": True, "popup_opacity": 100,
+            "voice_bar_color": "#c93ff2", "voice_bar_height": "normal"}
 
 # Curated, revision-pinned catalog; available formats are not all release-tested.
 MODEL_CATALOG = ({'name': 'Parakeet Unified English 0.6B',
@@ -198,10 +199,14 @@ SILENCE_BLOCKS = 22                    # ~0.7 s of silence ends a phrase
 MIN_BLOCKS = 8                         # ignore blips shorter than ~0.25 s
 MAX_BLOCKS = 10 * SR // BLOCK          # long speech is sent in 10 s pieces
 PURPLE = QColor("#c93ff2")
-SIZES = {"small": 0.8, "medium": 1.0, "large": 1.3}
+SIZES = {"tiny": 0.55, "extra_small": 0.65, "small": 0.8, "medium": 1.0, "large": 1.3}
+BAR_HEIGHTS = {"subtle": 0.65, "normal": 1.0, "taller": 1.35}
+BAR_COLORS = (("Purple", "#c93ff2"), ("Blue", "#4f9cff"),
+              ("Green", "#34c759"), ("Amber", "#ffb340"))
 SPEEDS = [("Fastest  -  0.25 s pause", 8), ("Balanced  -  0.4 s pause", 12), ("Accurate  -  0.7 s pause", 22)]
-UNLOAD_CHOICES = [("Never", 0), ("After 5 minutes idle", 5), ("After 10 minutes idle", 10),
-                  ("After 15 minutes idle", 15)]
+# -1 means after a successful, complete insertion; 0 keeps the model loaded.
+UNLOAD_CHOICES = [("5 minutes idle", 5), ("10 minutes idle", 10), ("15 minutes idle", 15),
+                  ("Never", 0), ("Immediately after pasting", -1)]
 
 
 # Application branding is embedded so this remains a standalone Python file.
@@ -860,6 +865,47 @@ def raise_topmost(widget):
 
 
 # ----------------------------------------------------------------- settings
+def _normalise_ui_settings(settings):
+    """One memory policy; migrate old switches without touching unrelated prefs."""
+    legacy = settings.pop('unload_after_paste', None)
+    settings.pop('preload_on_popup', None)
+    value = settings.get('unload_min', DEFAULTS['unload_min'])
+    if legacy is True:
+        value = -1
+    elif legacy is False and value not in (0, 5, 10, 15):
+        value = 0
+    if type(value) is not int or value not in (-1, 0, 5, 10, 15):
+        value = DEFAULTS['unload_min']
+    settings['unload_min'] = value
+    if type(settings.get('popup_locked')) is not bool:
+        settings['popup_locked'] = DEFAULTS['popup_locked']
+    opacity = settings.get('popup_opacity', 100)
+    if type(opacity) not in (int, float) or (isinstance(opacity, float) and not math.isfinite(opacity)):
+        opacity = 100
+    settings['popup_opacity'] = max(50, min(100, round(opacity)))
+    color = settings.get('voice_bar_color', '')
+    settings['voice_bar_color'] = color.lower() if isinstance(color, str) and re.fullmatch(r'#[0-9a-fA-F]{6}', color) else DEFAULTS['voice_bar_color']
+    if not isinstance(settings.get('voice_bar_height'), str) or settings['voice_bar_height'] not in BAR_HEIGHTS:
+        settings['voice_bar_height'] = 'normal'
+    if not isinstance(settings.get('size'), str) or settings['size'] not in SIZES:
+        settings['size'] = DEFAULTS['size']
+    return settings
+
+
+def _voice_bar_color(settings):
+    value = settings.get('voice_bar_color', DEFAULTS['voice_bar_color'])
+    if not isinstance(value, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', value):
+        value = DEFAULTS['voice_bar_color']
+    return QColor(value)
+
+
+def _popup_opacity(settings):
+    value = settings.get('popup_opacity', 100)
+    if type(value) not in (int, float) or (isinstance(value, float) and not math.isfinite(value)):
+        value = 100
+    return max(50, min(100, value)) / 100.0
+
+
 def load_settings():
     s = dict(DEFAULTS)
     try:
@@ -873,7 +919,7 @@ def load_settings():
             s.update(saved)
     except Exception:
         pass
-    return s
+    return _normalise_ui_settings(s)
 
 
 def save_settings(s):
@@ -3255,6 +3301,9 @@ class Pill(_NoActivatePopup):
         self.setFixedSize(int((self.PW + 2 * self.M) * self.k), int((self.PH + 2 * self.M) * self.k))
         self.engine, self.settings = engine, settings
         self._press, self._moved = None, False
+        self._press_control, self._drag_allowed, self._dragging = -1, False, False
+        self._target_opacity = _popup_opacity(settings)
+        self.setWindowOpacity(self._target_opacity)
         self.blend = 0.0                       # 0 = mic, 1 = speaking bars
         self.bars = [6.0] * 5
         self.hov = [0.0] * 4
@@ -3278,6 +3327,24 @@ class Pill(_NoActivatePopup):
     def set_scale(self, k):
         self.k = k
         self.setFixedSize(int((self.PW + 2 * self.M) * k), int((self.PH + 2 * self.M) * k))
+        self.update()
+
+    def apply_appearance(self):
+        self._sig = None
+        self._target_opacity = _popup_opacity(self.settings)
+        if self.settings.get('popup_locked', True) and self._press is not None:
+            if self._dragging:
+                self.move(self.clamped(self._origin))
+            self._moved, self._drag_allowed, self._dragging = True, False, False
+        if self.fade.state() == QPropertyAnimation.State.Running:
+            if not self.user_hidden:
+                current = self.windowOpacity()
+                self.fade.stop()
+                self.fade.setStartValue(current)
+                self.fade.setEndValue(self._target_opacity)
+                self.fade.start()
+        else:
+            self.setWindowOpacity(self._target_opacity)
         self.update()
 
     def visible_bounds(self):
@@ -3317,15 +3384,16 @@ class Pill(_NoActivatePopup):
     def _fade_done(self):
         if self.user_hidden:
             self.hide()
-            self.setWindowOpacity(1.0)
+        self.setWindowOpacity(_popup_opacity(self.settings))
 
     def fade_in(self):
         self.user_hidden = False
         self.fade.stop()
+        self._target_opacity = _popup_opacity(self.settings)
         self.setWindowOpacity(0.0)
         self.show()
         self.fade.setStartValue(0.0)
-        self.fade.setEndValue(1.0)
+        self.fade.setEndValue(self._target_opacity)
         self.fade.start()
 
     def glide_to(self, pt: QPoint):
@@ -3352,7 +3420,8 @@ class Pill(_NoActivatePopup):
         if self.blend > 0:
             amp = min(1.0, eng.level * 22)
             for i in range(5):
-                tgt = 7 + amp * 24 * (0.4 + 0.6 * abs(math.sin(self._t * 9 + i * 1.4)))
+                height = BAR_HEIGHTS.get(self.settings.get("voice_bar_height", "normal"), 1.0)
+                tgt = height * (7 + amp * 24 * (0.4 + 0.6 * abs(math.sin(self._t * 9 + i * 1.4))))
                 self.bars[i] += (tgt - self.bars[i]) * 0.35
             dirty = True
         tx = 1.0 if self.inside else 0.0
@@ -3364,7 +3433,11 @@ class Pill(_NoActivatePopup):
             if abs(d) > 0.005:
                 self.hov[i] += d * 0.3
                 dirty = True
-        sig = (eng.listening, eng.paused, eng.active, self.settings["dark_mode"])
+        if _popup_opacity(self.settings) != self._target_opacity:
+            self.apply_appearance()
+            dirty = True
+        sig = (eng.listening, eng.paused, eng.active, self.settings["dark_mode"],
+               self.settings.get("voice_bar_color"), self.settings.get("voice_bar_height"))
         if sig != self._sig:
             self._sig = sig
             dirty = True
@@ -3410,7 +3483,7 @@ class Pill(_NoActivatePopup):
             p.drawRoundedRect(QRectF(pc.x() - 4.5, pc.y() - 5, 3, 10), 1, 1)
             p.drawRoundedRect(QRectF(pc.x() + 1.5, pc.y() - 5, 3, 10), 1, 1)
 
-        # centre: mic <-> purple bars (cross-fade)
+        # centre: mic <-> voice bars (cross-fade)
         if self.blend < 0.99:
             p.setOpacity(1.0 - self.blend)
             col = fg if eng.active else dim
@@ -3424,7 +3497,7 @@ class Pill(_NoActivatePopup):
             p.setPen(Qt.PenStyle.NoPen)
         if self.blend > 0.01:
             p.setOpacity(self.blend)
-            p.setBrush(PURPLE)
+            p.setBrush(_voice_bar_color(self.settings))
             for i, h in enumerate(self.bars):
                 p.drawRoundedRect(QRectF(mc.x() - 27 + i * 12, mc.y() - h / 2, 6, h), 3, 3)
         p.setOpacity(1.0)
@@ -3459,6 +3532,7 @@ class Pill(_NoActivatePopup):
     def _hit(self, pos):
         pos = QPointF(pos.x() / self.k, pos.y() / self.k)
         for i, (c, r) in enumerate(zip(self._centers(), (20, 24, 20, 15))):
+            r = max(r, 11 / self.k)  # keep all four targets at least 22 px, even at Tiny
             if (pos.x() - c.x()) ** 2 + (pos.y() - c.y()) ** 2 <= r * r:
                 return i
         return -1
@@ -3468,14 +3542,18 @@ class Pill(_NoActivatePopup):
             self.glide.stop()
             self._press = e.globalPosition().toPoint()
             self._origin = self.pos()
-            self._moved = False
+            self._press_control = self._hit(e.position())
+            self._drag_allowed = not self.settings.get('popup_locked', True)
+            self._moved, self._dragging = False, False
 
     def mouseMoveEvent(self, e):
         if self._press is not None:
             d = e.globalPosition().toPoint() - self._press
             if self._moved or d.manhattanLength() > 5:
                 self._moved = True
-                self.move(self._origin + d)
+                if self._drag_allowed and not self.settings.get('popup_locked', True):
+                    self._dragging = True
+                    self.move(self._origin + d)
             return
         h = self._hit(e.position())
         self.inside = True
@@ -3492,12 +3570,17 @@ class Pill(_NoActivatePopup):
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton or self._press is None:
             return
+        moved = self._moved or (e.globalPosition().toPoint() - self._press).manhattanLength() > 5
         self._press = None
-        if self._moved:
-            self.glide_to(self.clamped(self.pos()))
-            self.dragged.emit()
+        if moved:
+            if self._dragging and not self.settings.get('popup_locked', True):
+                self.glide_to(self.clamped(self.pos()))
+                self.dragged.emit()
+            self._dragging = False
             return
         h = self._hit(e.position())
+        if h != self._press_control:
+            return
         eng = self.engine
         if h == 0:
             if eng.listening:
@@ -3532,6 +3615,98 @@ class Pill(_NoActivatePopup):
         m.addAction(a1)
         m.addAction(a2)
         m.exec(e.globalPos())
+
+
+def _check_popup_controls(application):
+    """Exercise real Qt popup rendering/events with synthetic input, never audio."""
+    from types import SimpleNamespace
+    from PyQt6.QtGui import QMouseEvent
+    cases = []
+    for dark in (True, False):
+        for size, scale in SIZES.items():
+            state = dict(DEFAULTS, dark_mode=dark, size=size, popup_opacity=75,
+                         voice_bar_color='#29b6f6', voice_bar_height='taller')
+            engine = SimpleNamespace(listening=False, paused=False, active=False, speaking=False,
+                                     level=0.0, model=None)
+            pill = Pill(engine, state)
+            pill.timer.stop()
+            pill.guard.stop()
+            pill.glide.setDuration(0)
+            dragged, settings_clicked = [], []
+            pill.dragged.connect(lambda: dragged.append(True))
+            pill.settings_requested.connect(lambda: settings_clicked.append(True))
+            def event(kind, local, global_pos, button=Qt.MouseButton.LeftButton):
+                buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+                application.sendEvent(pill, QMouseEvent(kind, local, global_pos, button, buttons,
+                                                       Qt.KeyboardModifier.NoModifier))
+            def drag():
+                start = QPointF(24 * scale, 18 * scale)
+                offset = QPointF(36, 20)
+                global_start = QPointF(pill.pos()) + start
+                event(QEvent.Type.MouseButtonPress, start, global_start)
+                event(QEvent.Type.MouseMove, start + offset, global_start + offset, Qt.MouseButton.NoButton)
+                event(QEvent.Type.MouseButtonRelease, start + offset, global_start + offset)
+            try:
+                pill.move(180, 120)
+                pill.show()
+                application.processEvents()
+                origin = pill.pos()
+                for index, center in enumerate(pill._centers()):
+                    assert pill._hit(center * scale) == index, (size, index)
+                    assert pill._hit(center * scale + QPointF(0, 10.9)) == index
+                drag()
+                assert pill.pos() == origin and not dragged and not settings_clicked
+                gear = pill._centers()[2] * scale
+                global_gear = QPointF(pill.pos()) + gear
+                event(QEvent.Type.MouseButtonPress, gear, global_gear)
+                event(QEvent.Type.MouseButtonRelease, gear, global_gear)
+                assert settings_clicked == [True], 'Locked buttons must still work'
+                state['popup_locked'] = False
+                pill.apply_appearance()
+                drag()
+                assert pill.pos() == origin + QPoint(36, 20) and dragged == [True]
+                state['popup_locked'] = True
+                # Fade-in, live changes during a fade, hide, and show must all
+                # preserve the chosen opacity rather than restoring full opacity.
+                pill.fade_in()
+                pill.fade.setCurrentTime(120)
+                state['popup_opacity'] = 65
+                pill.apply_appearance()
+                pill.fade.setCurrentTime(pill.fade.duration())
+                application.processEvents()
+                assert abs(pill.windowOpacity() - .65) < .01
+                pill.hide_popup()
+                pill.fade.setCurrentTime(pill.fade.duration())
+                application.processEvents()
+                assert not pill.isVisible()
+                pill.show_popup()
+                pill.fade.setCurrentTime(pill.fade.duration())
+                application.processEvents()
+                assert pill.isVisible() and abs(pill.windowOpacity() - .65) < .01
+                engine.active = engine.speaking = True  # visualization only, no microphone
+                engine.level = .06
+                for _ in range(60):
+                    pill._tick()
+                image = pill.grab().toImage()
+                pixels = sum(image.pixelColor(x, y).name() == state['voice_bar_color']
+                             for y in range(image.height()) for x in range(image.width()))
+                assert pixels >= 5 and max(pill.bars) < Pill.PH - 10, (size, pixels, pill.bars)
+                assert pill.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+                assert pill.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+                assert not engine.listening
+                cases.append({'theme': 'dark' if dark else 'light', 'size': size,
+                              'logical_width': pill.width(), 'logical_height': pill.height(),
+                              'custom_color_pixels': pixels, 'locked_drag_blocked': True,
+                              'locked_settings_button_works': True, 'unlocked_drag_works': True,
+                              'opacity_after_fades': round(pill.windowOpacity(), 3)})
+            finally:
+                pill.user_hidden = True
+                pill.fade.stop()
+                pill.glide.stop()
+                pill.hide()
+                pill.deleteLater()
+    return {'status': 'ok', 'rendered_cases': cases, 'default_position_locked': DEFAULTS['popup_locked'],
+            'minimum_hit_target_px': 22, 'microphone_opened': False, 'synthetic_mouse_events': True}
 
 
 # ------------------------------------------------------------- global shortcut
@@ -4337,14 +4512,16 @@ class SettingsDialog(QDialog):
     stop_mode_changed = pyqtSignal(str)
     update_check_requested = pyqtSignal()
     updates_changed = pyqtSignal(bool)
-    lifecycle_changed = pyqtSignal()
+    popup_changed = pyqtSignal()
     update_cancel_requested = pyqtSignal()
     update_progress_requested = pyqtSignal()
 
     def __init__(self, settings, engine):
         super().__init__(None, Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)   # rounded window corners
+        _normalise_ui_settings(settings)
         self.settings, self.engine = settings, engine
+        self.engine.unload_after_paste = settings["unload_min"] == -1
         self.setWindowTitle(f"{APP_NAME} - Settings")
         self.resize(1000, 720)
 
@@ -4458,7 +4635,14 @@ class SettingsDialog(QDialog):
         c1.addWidget(card)
 
         card, cl = _card()
-        cl.addLayout(_text_block("Pop-up position", "Pick a spot, or just drag the pop-up."))
+        cl.addLayout(_text_block("Pop-up position", "Choose a preset below. Unlock to drag the pop-up."))
+        row = QHBoxLayout()
+        row.addLayout(_text_block("Lock position", "Prevents accidental movement; buttons still work."), 1)
+        self.position_lock = Switch(settings['popup_locked'])
+        self.position_lock.setAccessibleName('Lock pop-up position')
+        self.position_lock.toggled.connect(self._lock_position)
+        row.addWidget(self.position_lock)
+        cl.addLayout(row)
         self.picker = PositionPicker(settings["position"])
         self.picker.chosen.connect(self._pos)
         cl.addWidget(self.picker, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -4578,31 +4762,14 @@ class SettingsDialog(QDialog):
         self._select_repo(preferred)
         self._catalog_dialog = None
 
-        for key, title, description in (
-                ('unload_after_paste', 'Unload after pasting', 'Release model RAM after successful insertion; never during recording or queued work.'),
-                ('preload_on_popup', 'Preload when opening pop-up', 'Show / hide shortcut loads the selected model in the background. No recording starts.')):
-            row = QHBoxLayout()
-            row.addLayout(_text_block(title, description), 1)
-            control = Switch(settings.get(key, True))
-            control.setAccessibleName(title)
-            control.toggled.connect(lambda on, name=key: self._lifecycle(name, on))
-            setattr(self, key, control)
-            row.addWidget(control)
-            cl.addLayout(row)
-        cl.addLayout(_text_block("Unload model when idle", "Independent fallback timer. Show the pop-up or use the dictation shortcut to reload."))
+        cl.addLayout(_text_block("UNLOAD", "Show the pop-up to preload without recording. Immediately releases RAM only after successful pasting."))
         self.unload = QComboBox()
+        self.unload.setAccessibleName('Model unload timing')
         for label, mins in UNLOAD_CHOICES:
             self.unload.addItem(label, mins)
-        i = self.unload.findData(settings.get("unload_min", 0))
-        self.unload.setCurrentIndex(i if i >= 0 else 0)
+        self.unload.setCurrentIndex(self.unload.findData(settings['unload_min']))
         self.unload.currentIndexChanged.connect(self._unload)
-        row = QHBoxLayout()
-        row.addWidget(self.unload, 1)
-        self.btn_unload = QPushButton("Unload now")
-        self.btn_unload.setToolTip("Release model RAM now. Disabled while recording, transcribing, or loading.")
-        self.btn_unload.clicked.connect(self._unload_now)
-        row.addWidget(self.btn_unload)
-        cl.addLayout(row)
+        cl.addWidget(self.unload)
 
         cl.addLayout(_text_block("Download folder"))
         row = QHBoxLayout()
@@ -4633,13 +4800,48 @@ class SettingsDialog(QDialog):
         c3.addWidget(card)
 
         card, cl = _card()
-        cl.addLayout(_text_block("Pop-up size", "Small, medium or large pop-up."))
+        cl.addLayout(_text_block("Pop-up size", "Tiny to large; the same capsule and controls."))
         self.size = QComboBox()
-        for label, key in ("Small", "small"), ("Medium", "medium"), ("Large", "large"):
+        for label, key in (("Tiny", "tiny"), ("Extra small", "extra_small"),
+                           ("Small", "small"), ("Medium", "medium"), ("Large", "large")):
             self.size.addItem(label, key)
         self.size.setCurrentIndex(max(0, self.size.findData(settings.get("size", "medium"))))
         self.size.currentIndexChanged.connect(self._size)
         cl.addWidget(self.size)
+        cl.addLayout(_text_block("Voice-bar color"))
+        row = QHBoxLayout()
+        self.bar_color = QComboBox()
+        for label, color in BAR_COLORS:
+            self.bar_color.addItem(label, color)
+        self.bar_color.addItem('Custom', 'custom')
+        color_index = self.bar_color.findData(settings['voice_bar_color'])
+        self.bar_color.setCurrentIndex(color_index if color_index >= 0 else self.bar_color.count() - 1)
+        self.bar_color.currentIndexChanged.connect(self._bar_color)
+        row.addWidget(self.bar_color, 1)
+        self.custom_color = QPushButton(settings['voice_bar_color'].upper())
+        self.custom_color.setToolTip('Choose a custom voice-bar color')
+        self.custom_color.clicked.connect(self._pick_bar_color)
+        row.addWidget(self.custom_color)
+        cl.addLayout(row)
+        cl.addLayout(_text_block("Pop-up opacity", "50–100%; the settings window stays opaque."))
+        row = QHBoxLayout()
+        self.opacity = QSlider(Qt.Orientation.Horizontal)
+        self.opacity.setAccessibleName('Pop-up opacity')
+        self.opacity.setRange(50, 100)
+        self.opacity.setValue(settings['popup_opacity'])
+        self.opacity_value = QLabel(f"{settings['popup_opacity']}%")
+        self.opacity_value.setMinimumWidth(38)
+        self.opacity.valueChanged.connect(self._opacity)
+        row.addWidget(self.opacity, 1)
+        row.addWidget(self.opacity_value)
+        cl.addLayout(row)
+        cl.addLayout(_text_block("Voice-bar height"))
+        self.bar_height = QComboBox()
+        for key in BAR_HEIGHTS:
+            self.bar_height.addItem(key.capitalize(), key)
+        self.bar_height.setCurrentIndex(self.bar_height.findData(settings['voice_bar_height']))
+        self.bar_height.currentIndexChanged.connect(self._bar_height)
+        cl.addWidget(self.bar_height)
         c3.addWidget(card)
 
         card, cl = _card()
@@ -4705,7 +4907,6 @@ class SettingsDialog(QDialog):
 
     def _tick(self):
         e = self.engine
-        self.btn_unload.setEnabled(e.model is not None and _update_install_safe(e))
         lvl = e.level if e.active else e.mon_level
         self.meter.setValue(min(100, int(lvl * 22 * 100)))
         if e.loading:
@@ -4765,7 +4966,6 @@ class SettingsDialog(QDialog):
         self.status.setToolTip(p)
         self.status.setText(f"<span style='color:{color}; font-size:12pt;'>\u25cf</span>&nbsp; "
                             f"{html.escape(text).replace(chr(10), '<br>')}")
-        self.btn_unload.setEnabled(self.engine.model is not None and _update_install_safe(self.engine))
 
     # ---- microphone
     def populate_mics(self):
@@ -4893,11 +5093,46 @@ class SettingsDialog(QDialog):
         save_settings(self.settings)
         self.size_changed.emit(key)
 
-    def _unload_now(self):
-        if self.engine.unload():
-            self.refresh_status()
+    def _lock_position(self, on):
+        self.settings['popup_locked'] = bool(on)
+        save_settings(self.settings)
+        self.popup_changed.emit()
+
+    def _opacity(self, value):
+        self.settings['popup_opacity'] = value
+        self.opacity_value.setText(f'{value}%')
+        save_settings(self.settings)
+        self.popup_changed.emit()
+
+    def _bar_height(self, i):
+        self.settings['voice_bar_height'] = self.bar_height.itemData(i) or 'normal'
+        save_settings(self.settings)
+        self.popup_changed.emit()
+
+    def _set_bar_color(self, color):
+        if not isinstance(color, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+            return
+        color = color.lower()
+        self.settings['voice_bar_color'] = color
+        self.bar_color.blockSignals(True)
+        index = self.bar_color.findData(color)
+        self.bar_color.setCurrentIndex(index if index >= 0 else self.bar_color.count() - 1)
+        self.bar_color.blockSignals(False)
+        self.custom_color.setText(color.upper())
+        save_settings(self.settings)
+        self.popup_changed.emit()
+
+    def _bar_color(self, i):
+        color = self.bar_color.itemData(i)
+        if color == 'custom':
+            self._pick_bar_color()
         else:
-            self.refresh_status("Finish recording/transcription before unloading the model.")
+            self._set_bar_color(color)
+
+    def _pick_bar_color(self):
+        color = QColorDialog.getColor(_voice_bar_color(self.settings), self, 'Voice-bar color',
+                                      QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        self._set_bar_color(color.name() if color.isValid() else self.settings['voice_bar_color'])
 
     def _pick_symbols(self):
         start = str(Path(self.settings.get('custom_symbols_path') or APP_DIR).parent)
@@ -4950,11 +5185,7 @@ class SettingsDialog(QDialog):
         self.update_cancel.setVisible(busy)
         self.update_cancel.setEnabled(state.get('phase') != 'cancelling')
 
-    def _lifecycle(self, key, on):
-        self.settings[key] = bool(on)
-        self.engine.unload_after_paste = bool(self.settings.get('unload_after_paste', True))
-        save_settings(self.settings)
-        self.lifecycle_changed.emit()
+
 
     def _selected_repo(self):
         text = self.repo.currentText().strip()
@@ -5008,7 +5239,11 @@ class SettingsDialog(QDialog):
         self._catalog_dialog.raise_()
 
     def _unload(self, i):
-        self.settings["unload_min"] = int(self.unload.itemData(i) or 0)
+        value = self.unload.itemData(i)
+        if value not in (-1, 0, 5, 10, 15):
+            return
+        self.settings['unload_min'] = value
+        self.engine.unload_after_paste = value == -1
         save_settings(self.settings)
 
     def show_dir(self):
@@ -5105,7 +5340,7 @@ class App:
         except (OSError, ValueError) as exc:
             custom_error = 'Custom symbols: ' + str(exc)
         self.engine.device_name = self.settings["mic"]
-        self.engine.unload_after_paste = bool(self.settings.get("unload_after_paste", True))
+        self.engine.unload_after_paste = self.settings["unload_min"] == -1
         self.engine.auto_enter = self.settings.get("auto_enter", False)
         self.engine.silence_blocks = int(self.settings.get("pause_blocks", 8))
         self.pill = Pill(self.engine, self.settings)
@@ -5143,16 +5378,12 @@ class App:
         a0.triggered.connect(self.toggle_popup)
         a1.triggered.connect(self.open_settings)
         a2.triggered.connect(self.quit)
-        unload_action = QAction("Unload model now", menu)
-        unload_action.triggered.connect(self.unload_model)
         update_action = QAction("Check for updates", menu)
         update_action.triggered.connect(lambda: self.check_updates(manual=True))
         progress_action = QAction("Update progress…", menu)
         progress_action.triggered.connect(self.show_update_progress)
-        for a in (a0, a1, unload_action, update_action, progress_action, a2):
+        for a in (a0, a1, update_action, progress_action, a2):
             menu.addAction(a)
-        menu.aboutToShow.connect(lambda: unload_action.setEnabled(
-            self.engine.model is not None and _update_install_safe(self.engine)))
         self.tray.setContextMenu(menu)
         self._menu, self._acts = menu, (a0, a1, a2)
         self.tray.activated.connect(
@@ -5177,11 +5408,7 @@ class App:
 
         path = self.settings["model_path"]
         if path and Path(path).exists():
-            if not self.settings.get('preload_on_popup', True):
-                self.engine.load_model(path)
-                self.say("Loading model...")
-            else:
-                self.say('Model selected — show the pop-up to preload, or press the dictation shortcut.', 4500)
+            self.say('Model selected — show the pop-up to preload, or press the dictation shortcut.', 4500)
         else:
             self.say("Open Settings to download or select a model")
         if custom_error:
@@ -5230,8 +5457,7 @@ class App:
             self.pill.hide_popup()
         else:
             self.pill.show_popup()
-            if self.settings.get('preload_on_popup', True):
-                self.reload_model(purpose='popup')
+            self.reload_model(purpose='popup')
 
     def set_dict_hotkey(self, seq):
         ok = self.dict_hotkeys.set(seq) if seq else False
@@ -5420,8 +5646,7 @@ class App:
     def on_unloaded(self):
         message = ('Text inserted; model unloaded to free memory.' if self.engine.unload_reason == 'paste'
                    else 'Model unloaded to free memory.')
-        hint = (' Show the pop-up to preload, or use the dictation shortcut.'
-                if self.settings.get('preload_on_popup', True) else ' Use the dictation shortcut to reload.')
+        hint = ' Show the pop-up to preload, or use the dictation shortcut.'
         self.say(message + hint, 4000)
         if self.dialog:
             self.dialog.refresh_status()
@@ -5429,8 +5654,7 @@ class App:
     def reload_model(self, *, purpose='manual'):
         if getattr(self, '_quitting', False):
             return False
-        if purpose == 'popup' and (not self.settings.get('preload_on_popup', True)
-                or self.pill.user_hidden or not self.pill.isVisible()):
+        if purpose == 'popup' and (self.pill.user_hidden or not self.pill.isVisible()):
             return False
         if purpose == 'dictation' and not self._dictation_after_load:
             return False
@@ -5476,6 +5700,7 @@ class App:
             self.dialog.position_chosen.connect(self.go_to_preset)
             self.dialog.hotkey_changed.connect(self.set_hotkey)
             self.dialog.size_changed.connect(self.on_size)
+            self.dialog.popup_changed.connect(self.pill.apply_appearance)
             self.dialog.dict_hotkey_changed.connect(self.set_dict_hotkey)
             self.dialog.stop_mode_changed.connect(self.on_stop_mode)
             self.dialog.update_check_requested.connect(lambda: self.check_updates(manual=True))
@@ -5549,8 +5774,9 @@ def _packaging_smoke_test(arguments):
         assert normalize_dictation_text("zerozerofive") == "005"
         assert normalize_dictation_text("hello enter world enter five zero") == "hello\nworld\n50"
         report['spoken_enter'] = {'newlines_are_text': True, 'implicit_enter_key': False}
-        report['model_lifecycle_defaults'] = {key: DEFAULTS[key] for key in ('unload_after_paste', 'preload_on_popup')}
-        assert all(report['model_lifecycle_defaults'].values())
+        report['model_lifecycle'] = {'unload_min': DEFAULTS['unload_min'], 'popup_preloads_without_recording': True,
+                                     'choices': [label for label, _ in UNLOAD_CHOICES], 'single_control': True}
+        assert DEFAULTS['unload_min'] == -1 and len(UNLOAD_CHOICES) == 5
         report['model_catalog'] = [{'name': model['name'], 'repo': model['repo'], 'revision': model['revision'],
                                     'release_fixtures': model['release_checks']} for model in MODEL_CATALOG]
         if getattr(sys, 'frozen', False):
@@ -5568,12 +5794,20 @@ def _packaging_smoke_test(arguments):
         report["number_conversion"] = {"five_zero": "50", "twenty": "20", "zerozerofive": "005",
                                        "verified_digit_count": len(long_digits), "leading_zeros_preserved": True}
         assert len(set(SPOKEN_SYMBOLS.values())) >= 100
+        saved = load_settings()
+        report['saved_popup_preferences'] = {key: saved[key] for key in (
+            'unload_min', 'popup_locked', 'position', 'pos', 'size', 'popup_opacity',
+            'voice_bar_color', 'voice_bar_height')}
+        report['saved_popup_preferences']['legacy_controls_removed'] = not (
+            {'unload_after_paste', 'preload_on_popup'} & saved.keys())
         stage("initializing engine and settings")
         engine = Engine()
         dialog = SettingsDialog(dict(DEFAULTS), engine)
         assert len(dialog.findChildren(QKeySequenceEdit)) == 2
         dialog.tick.stop()
         dialog.close()
+        stage("checking popup sizes, lock, colors, heights and opacity with synthetic mouse input")
+        report["popup_customization"] = _check_popup_controls(application)
         update_window = UpdateDialog()
         update_window.set_state(dict(phase='downloading', percent=35, status='UI verification',
                                      total=100*1048576, received=35*1048576, speed=2*1048576, eta=32.5))

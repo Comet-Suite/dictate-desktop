@@ -2,9 +2,17 @@
 
 ## First upgrade from 1.2.0
 
-Version 1.2.0 has no built-in release updater. **Install the current version manually once**: finish dictation, quit the existing copy from the tray, run `Dictate-Setup-1.2.4-x64.exe`, and keep the existing installation directory. The Inno Setup application ID is unchanged, so previous installation location and preferences are retained.
+Version 1.2.0 has no built-in release updater. **Install the current version manually once**: finish dictation, quit the existing copy from the tray, run `Dictate-Setup-1.2.5-x64.exe`, and keep the existing installation directory. The Inno Setup application ID is unchanged, so previous installation location and preferences are retained.
 
-## Contrast patch: 1.2.3 → 1.2.4
+## Popup/settings update: 1.2.4 → 1.2.5
+
+Use **Check for updates → Install and restart**, or run the official current installer after quitting the existing app. The installation folder, both shortcuts, selected/downloaded models, custom-symbol files and startup preference are retained. The 1.2.4 readable updater colors and consent policy are unchanged.
+
+Version 1.2.5 adds default-on saved position lock, Tiny/Extra small, voice-bar color/height and popup opacity. It replaces the two model-memory switches and manual unload control with one ordered **5/10/15/Never/Immediately after pasting** choice. Old post-paste-on settings become Immediately; with that switch off, the old idle value is kept. Old settings with only an idle value retain it. Showing the popup preloads without recording; startup stays lazy. No model files move or redownload for this settings migration.
+
+The real Windows upgrade fixture starts from the final hash-pinned published **1.2.4** installer, performs the native in-place handoff and restart, checks file/preference preservation, then verifies the new binary reads the old memory policy and custom popup position correctly without overwriting the saved file.
+
+## Historical contrast patch: 1.2.3 → 1.2.4
 
 The updater has explicit native palettes and text/control colors in all window states. Secondary text and primary-button colors have stronger contrast, and changing Dark mode updates an open progress/confirmation window. Automated Qt rendering checks cover dark/light UI against deliberately unreadable inherited application palettes; frozen and installed Windows builds run the same checks.
 
@@ -12,7 +20,7 @@ Choose **Check for updates → Install and restart**. If an old 1.2.1/1.2.2 conf
 
 ## Feature update: 1.2.2 → 1.2.3
 
-Use **Check for updates → Install and restart**. The existing 1.2.2 client uses its existing interface for this upgrade; 1.2.3 includes the new progress UI for later releases. Both model-memory switches are on by default after migration; explicit existing values are preserved.
+Use **Check for updates → Install and restart**. The existing 1.2.2 client uses its existing interface for this upgrade; 1.2.3 includes the new progress UI for later releases. In 1.2.3, both model-memory switches defaulted on. Those historical switches are superseded by the single timing choice in 1.2.5, as described above.
 
 ## Measured progress in 1.2.3
 
@@ -62,4 +70,4 @@ The updater uses the official repository and HTTPS, restricts asset redirects to
 
 Release checks contact GitHub; model downloads contact the selected model host. Neither operation uploads microphone audio or transcripts. Dictation remains local and works offline after the model is installed.
 
-The automated release pipeline tests real Windows installation, a hash-pinned 1.2.3-to-new-version upgrade through the native helper, in-place paths, preference/file preservation and restart. Unit tests separately exercise release parsing, blocked assets, failed verification, cancellation, consent and recording-safety decisions. This does not represent a physical reboot, a microphone test, or an already-performed upgrade to a future release.
+The automated release pipeline tests real Windows installation, a hash-pinned 1.2.4-to-new-version upgrade through the native helper, in-place paths, preference/file preservation and restart. Unit tests separately exercise release parsing, blocked assets, failed verification, cancellation, consent and recording-safety decisions. This does not represent a physical reboot, a microphone test, or an already-performed upgrade to a future release.

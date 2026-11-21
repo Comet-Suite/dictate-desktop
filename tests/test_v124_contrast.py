@@ -29,7 +29,13 @@ def canonical(value):
     return value
 
 
-@pytest.mark.parametrize('name', FIXTURE['protected_ast'])
+# Only these paths are superseded by the confirmed v1.2.5 popup/single-policy work.
+# The new v1.2.5 fixture also guards every unchanged method inside these UI classes.
+V125_AUTHORIZED = {'load_settings', 'Pill', 'SettingsDialog', 'App.__init__',
+                   'App.toggle_popup', 'App.on_unloaded', 'App.reload_model'}
+
+
+@pytest.mark.parametrize('name', [name for name in FIXTURE['protected_ast'] if name not in V125_AUTHORIZED])
 def test_contrast_patch_does_not_change_other_application_behavior(name):
     parts = name.split('.')
     node = next(n for n in ast.parse((ROOT/'dictate.py').read_text()).body if getattr(n, 'name', '') == parts[0])
@@ -39,9 +45,10 @@ def test_contrast_patch_does_not_change_other_application_behavior(name):
     assert digest == FIXTURE['protected_ast'][name], name
 
 
-def test_native_handoff_and_all_model_defaults_are_unchanged():
+def test_native_handoff_is_unchanged_and_model_policy_is_now_single_control():
     assert hashlib.sha256((ROOT/'packaging/updater.cpp').read_bytes()).hexdigest() == FIXTURE['native_helper_sha256']
-    assert m.DEFAULTS['preload_on_popup'] and m.DEFAULTS['unload_after_paste']
+    assert m.DEFAULTS['unload_min'] == -1
+    assert not {'preload_on_popup', 'unload_after_paste'} & m.DEFAULTS.keys()
 
 
 @pytest.mark.parametrize('dark', [True, False])

@@ -25,31 +25,35 @@ Dictate turns speech into text in the application you are already using. Click i
 - **Natural amounts and symbols.** Say “four hundred dollars” or “400 rupees”; get `$400` or `₹400`. Percentages, numeric expressions, spoken email addresses, and 167 explicit symbols are supported.
 - **Two independent global shortcuts.** One controls pop-up visibility; the other starts and commits dictation.
 - **Editable custom symbols.** Map spoken phrases to literal symbols/text in a UTF-8 `.txt` file; save and reload without rebuilding. Say “enter” for a newline in the text.
-- **Memory on demand.** Unload after pasting, manually or after 5/10/15 idle minutes; preload by showing the popup without recording. Windows releases the native model worker’s entire address space.
+- **Memory on demand.** One unload choice: 5/10/15 idle minutes, Never, or Immediately after pasting. Show the popup to preload without recording; unloading closes the native model worker.
 - **Consent-based updates.** Download and verify newer stable releases automatically, then ask before an in-place installation and restart.
-- **A compact desktop companion.** Moveable pop-up, microphone meter, light/dark settings, model downloads, and idle unloading.
+- **A compact desktop companion.** Five popup sizes, a saved position lock, voice-bar colors/heights, opacity, light/dark settings and model downloads.
 
 <p align="center"><img src="assets/settings.png" width="1000" alt="Dictate settings showing the two shortcuts and model controls"></p>
 
-## Fixed in 1.2.4: readable update dialogs
+## New in 1.2.5: a steadier, more personal popup
 
-The updater now sets explicit text, background and control palettes for **active, inactive and disabled** states rather than inheriting a potentially conflicting Windows/Qt palette. Secondary text and action buttons have stronger contrast in both themes. Changing Dark mode also refreshes an already-open updater window.
+- **Position lock is on by default.** It prevents accidental dragging without disabling the microphone, pause, settings or close controls. Use **Settings → Pop-up position** to choose a preset, or unlock, drag and lock again. The lock and custom position are saved.
+- **Tiny and Extra small** join the unchanged Small, Medium and Large sizes. The capsule and four controls are retained, with at least 22-pixel hit targets at the smallest size.
+- **Voice-bar color:** Purple, Blue, Green, Amber, or a custom color. **Opacity:** 50–100%. **Voice-bar height:** Subtle, Normal or Taller. Changes apply live and are saved in the existing settings file.
+- **One UNLOAD dropdown**, in this order: **5 minutes idle → 10 minutes idle → 15 minutes idle → Never → Immediately after pasting**. It replaces the two lifecycle switches and manual unload control. Opening the popup still preloads the selected model without recording.
 
-The release tests render the real dialog in **both light and dark themes against deliberately black-on-black and white-on-white application palettes**. Small text and button states are checked against a 4.5:1 contrast floor; the existing rounded layout, logo and installation-consent rules are retained. Dictation and model behavior are unchanged from 1.2.3.
+<p align="center"><img src="assets/popup-settings.png" width="1000" alt="Existing three-column settings with the new popup size, color, opacity and bar-height controls"></p>
+<p align="center">Tiny &nbsp; <img src="assets/popup-tiny.png" alt="Tiny popup"> &nbsp; Extra small &nbsp; <img src="assets/popup-extra-small.png" alt="Extra small popup"></p>
+
+The supplied logo, three-column settings layout, dictation pipeline, both shortcuts, Auto Enter preference, model catalog, startup registration, updater security and readable **1.2.4** update palettes are retained. [Release history →](CHANGELOG.md)
+
+### Readable updates retained
+
+The updater uses explicit active/inactive/disabled palettes in both themes, including when Windows/Qt supplies conflicting colors. Real rendering checks enforce a 4.5:1 small-text/button contrast floor against deliberately black-on-black and white-on-white inherited palettes. Installation still requires **Install and restart** consent.
 
 <p align="center"><img src="assets/updater-confirm-dark.png" width="520" alt="Readable dark update confirmation"><br><img src="assets/updater-confirm-light.png" width="520" alt="Readable light update confirmation"></p>
-<p align="center"><em>Confirmation-interface previews; no installation was performed to capture these images.</em></p>
-
-## Features introduced in 1.2.3
-
-Version **1.2.3** adds measured updater progress, optional post-paste model unloading and popup preloading, a clearer supported-model catalog, and consistent rounded controls. The existing three-column settings layout, capsule popup, colors and supplied logo are retained.
-
-Both new model options are **on by default**, including when upgrading existing settings. They can be disabled independently in **Settings → Speech model**. Showing the popup preloads only; it never starts recording.
+<p align="center"><em>Interface previews captured without microphone input or an installation.</em></p>
 
 ## Install on Windows
 
 1. Open the **[latest release](https://github.com/Comet-Suite/dictate-desktop/releases/latest)**.
-2. Download `Dictate-Setup-1.2.4-x64.exe` and run it.
+2. Download `Dictate-Setup-1.2.5-x64.exe` and run it.
 3. Open **Dictate** from the Start menu.
 4. In **Settings → Speech model**, download a supported model or select a compatible `.gguf` file.
 5. Wait for the model to load, then click into the text box where you want your words.
@@ -76,13 +80,13 @@ The app checks its saved startup preference on a manual launch. The installer al
 
 If Windows still prevents startup, check **Windows Settings → Apps → Startup → Dictate** (or Task Manager → Startup apps) and enable it there. Dictate does not bypass Windows startup-app restrictions or administrator policies. Windows can delay startup applications while sign-in completes.
 
-To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.4** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
+To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.5** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
 
 ## Record, pause, finish
 
 | Shortcut | Default | Action |
 |---|---|---|
-| Show / hide | `Ctrl` + `Alt` + `D` | Toggle the floating pop-up; preload its selected model when showing it (if enabled). No recording. |
+| Show / hide | `Ctrl` + `Alt` + `D` | Toggle the floating pop-up; preload its selected model when showing it. No recording. |
 | Dictation | `Ctrl` + `Alt` + `Space` | First press: record. Second press: insert the complete recording. |
 
 Both shortcuts are configurable in Settings. Existing two-shortcut settings are preserved. If you used the single-shortcut build, its recording key is retained and the default show/hide key is restored.
@@ -142,12 +146,23 @@ Curated downloads are pinned to the catalog’s tested revision. A requested qua
 
 ### Model memory and preloading
 
-- **Unload after pasting — on by default:** after Dictate successfully sends the complete insertion, release the model and its native worker. It does not unload during a recording, queued transcription/paste, or model loading. An empty/failed insertion does not trigger it.
-- **Preload when opening pop-up — on by default:** opening the popup via Show / Hide or the tray preloads the selected local model in the background. It never starts recording. With this enabled, startup does not eagerly load the saved model; merely hiding an already-visible popup does not preload.
-- The **dictation shortcut** remains separate. It can reload an unloaded model and then record after your explicit Start request. Press again during loading to cancel that recording intent.
-- **Unload now** and the existing **Never / 5 / 10 / 15-minute** idle choices remain independent.
+Use **Settings → Speech model → UNLOAD**. There is one timing control, not overlapping switches:
 
-Both new switches can be turned off independently; explicitly saved choices are preserved. Unloading after a legacy automatic-mode phrase also turns listening off—disable post-paste unloading if you want continuous microphone listening. Settings’ small microphone level-monitor stream is separate from the model’s native memory. No “zero total app RAM” guarantee is made.
+| Choice (shown in this order) | Behavior |
+|---|---|
+| **5 minutes idle** | Keep the model ready between insertions; unload after at least 5 idle minutes. |
+| **10 minutes idle** | The same policy with a 10-minute idle interval. |
+| **15 minutes idle** | The same policy with a 15-minute idle interval. |
+| **Never** | Keep the selected model loaded until it is replaced or Dictate exits. |
+| **Immediately after pasting** | Release model RAM only after a successful complete insertion; the default for new settings. |
+
+Idle timers are checked approximately every 15 seconds. Recording, speech processing, model loading and queued transcription/paste work block unloading. Immediately does not mean unloading on Stop, during insertion, or after empty/failed insertion. Native-worker teardown releases that model process, not every byte used by the Qt application.
+
+Showing the popup with **Show / Hide** or the tray preloads the selected model in the background without starting recording. Hiding it does not load a model. Startup remains lazy; the saved model is not eagerly loaded just because Dictate launches. A model is not repeatedly reloaded while an already-visible popup sits on screen after a paste.
+
+The **dictation shortcut** is separate: it can reload an unloaded model and record after that explicit Start request. Press again during loading to cancel the recording intent. Immediately also turns legacy auto-mode listening off after successful insertion; select an idle interval or Never if you want to keep that model available for continuous use. The small Settings microphone-level monitor is separate from native-model memory.
+
+**Upgrading old settings:** an enabled old *Unload after pasting* switch becomes **Immediately after pasting**. If it was disabled, the old 5/10/15/Never idle choice is kept. An older settings file with only the idle value keeps that value. The obsolete lifecycle keys are removed from the in-memory settings and the next normal preference save writes the single policy; all unrelated/unknown preferences and model files are retained. Popup preloading is now automatic when explicitly showing it.
 
 ## Release updates
 
@@ -183,7 +198,7 @@ The application source remains a **single Python file**. Its logo is embedded, s
 
 ```powershell
 python -m pip install -r requirements-build.txt
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.4
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.5
 ```
 
 See **[Windows build instructions](docs/BUILDING.md)** for Inno Setup prerequisites, smoke tests, dependency notices, and release verification. Tagged releases are built on Windows through GitHub Actions, tested after installation, and published with checksums.
@@ -201,6 +216,7 @@ Native runtime compatibility and application behavior are tested separately. Phy
 ## Troubleshooting
 
 - **The updated app does not open:** quit the running copy from its tray menu first. Dictate prevents duplicate instances.
+- **The popup will not drag:** position lock is enabled by default. Unlock it under Pop-up position, or choose a preset without unlocking.
 - **The microphone is quiet:** select the correct input device and verify the level meter in Settings.
 - **A shortcut does not work:** choose an unused combination; another app may already own it.
 - **Text does not paste into a protected application:** test with a normal text editor. Elevated or clipboard-restricted apps may need special permissions or may reject simulated input.

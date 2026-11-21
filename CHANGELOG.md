@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.5 — Popup controls and one unload policy
+
+- Add a saved, default-on position lock that blocks drag-release mistakes without disabling popup buttons; preserve deliberate preset positioning and unlocked dragging.
+- Add Tiny and Extra small without changing the existing three popup sizes or capsule design; retain usable hit targets.
+- Add live, saved voice-bar presets/custom colors, 50–100% popup opacity, and Subtle/Normal/Taller bar heights. Preserve opacity through all fades.
+- Replace the two lifecycle switches and manual unload control with one ordered 5/10/15/Never/Immediately-after-pasting dropdown, migrating old preferences safely.
+- Keep automatic silent popup preloading and all existing recording/loading/pending-insertion unload guards.
+- Preserve the complete dictation/native-engine pipeline, model catalog, updater contrast/consent/hash checks, startup behavior, installation identity and supplied artwork.
+- Add popup rendering/mouse checks to frozen/installed smoke tests and extend the actual published 1.2.4 → 1.2.5 Windows upgrade check to cover legacy policy and saved position migration.
+
 ## 1.2.4 — Updater contrast fix
 
 - Set explicit native Qt palettes for active, inactive and disabled updater text and controls to avoid black-on-black Windows theme combinations.
