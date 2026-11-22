@@ -101,6 +101,12 @@ Parakeet v3 architecture with converted ternary-trained weights. GGUF file size 
 - English spoken numbers, symbols and text commands remain English. Upstream multilingual coverage is not a release test of every language, accent or microphone.
 - New model weights/quantizations can have different memory use, speed and recognition behavior. F16/F32 are much larger downloads; do not infer RAM from file size alone.
 
+### Tested local-file example
+
+The [Oruk Fourier 2B Q8_0 file](https://huggingface.co/oruk/oruk-fourier-2b/resolve/8bcce21695e4ba13569c48de6cedffcb8a7576f5/Fourier-2B-Q8_0.gguf?download=true) is a 2.19 GB English model for noncommercial use ([license](https://huggingface.co/oruk/oruk-fourier-2b#license)). In **Settings → Speech model → Select .gguf**, choose the downloaded file. Its metadata routes it to the bundled transcribe.cpp runtime.
+
+The [v1.2.5 Windows packaging test](https://github.com/Nathan-Roll1/mlx-audio-swift/actions/runs/45005911855) loaded the file, transcribed the JFK WAV, produced one final insertion callback and unloaded the worker. This used the portable executable's file-input test. [Exact model checksum and setup](https://huggingface.co/oruk/oruk-fourier-2b/blob/3f9745f27397cdf28850cd8b6a8683c3561491ff/examples/comet-dictate/README.md).
+
 ## Upstream references
 
 - [CrispASR Python bindings and architecture limits](https://pypi.org/project/crispasr/0.8.44/)
