@@ -31,17 +31,20 @@ Dictate turns speech into text in the application you are already using. Click i
 
 <p align="center"><img src="assets/settings.png" width="1000" alt="Dictate settings showing the two shortcuts and model controls"></p>
 
-## New in 1.2.5: a steadier, more personal popup
+## New in 1.2.6: record deliberately, stay out of the way
 
-- **Position lock is on by default.** It prevents accidental dragging without disabling the microphone, pause, settings or close controls. Use **Settings → Pop-up position** to choose a preset, or unlock, drag and lock again. The lock and custom position are saved.
-- **Tiny and Extra small** join the unchanged Small, Medium and Large sizes. The capsule and four controls are retained, with at least 22-pixel hit targets at the smallest size.
-- **Voice-bar color:** Purple, Blue, Green, Amber, or a custom color. **Opacity:** 50–100%. **Voice-bar height:** Subtle, Normal or Taller. Changes apply live and are saved in the existing settings file.
-- **One UNLOAD dropdown**, in this order: **5 minutes idle → 10 minutes idle → 15 minutes idle → Never → Immediately after pasting**. It replaces the two lifecycle switches and manual unload control. Opening the popup still preloads the selected model without recording.
+- **A working, centered mic.** Click it to start a complete recording. If the model is unloaded, Dictate loads it and starts only because you requested recording. Showing/preloading the popup alone never records.
+- **Waveform first.** Recording normally shows **only moving bars**. Hover to reveal **✕ Cancel · Pause/Resume · ✓ Paste over the waveform**; moving away hides the controls. Settings has moved to the popup’s **right-click menu**—there is no gear button.
+- **Clear finish/cancel actions.** ✕ discards without pasting, hides the popup and safely unloads the model; Dictate stays in the tray. ✓ inserts the whole session once, honors Auto Enter, and hides the popup. Pausing never submits or discards speech.
+- **Your existing shortcut defaults stay unchanged.** Assign **Win+H**, **Win+V**, or another supported Win chord in either shortcut box. `Win`, `Windows` and `Meta` identify the same modifier. A new duplicate assignment automatically clears the older Dictate binding; a failed registration rolls back instead of silently losing the previous shortcuts.
+- **Runtime ownership, not permanent Windows changes.** Assigned supported Win chords are intercepted while Dictate runs, suppressing the matched native voice-typing/clipboard-history action. Unassign or quit to restore normal delivery. Security combinations such as Win+L and Ctrl+Alt+Delete remain protected. [Details and limitations →](docs/SHORTCUTS.md)
 
-<p align="center"><img src="assets/popup-settings.png" width="1000" alt="Existing three-column settings with the new popup size, color, opacity and bar-height controls"></p>
-<p align="center">Tiny &nbsp; <img src="assets/popup-tiny.png" alt="Tiny popup"> &nbsp; Extra small &nbsp; <img src="assets/popup-extra-small.png" alt="Extra small popup"></p>
+<p align="center"><img src="assets/popup-recording.png" alt="Recording popup: moving bars only, no buttons"><br><em>Recording, pointer away</em><br><img src="assets/popup-hover.png" alt="Cancel, Pause and Paste overlay the waveform only while hovered"><br><em>The same popup on hover</em></p>
 
-The supplied logo, three-column settings layout, dictation pipeline, both shortcuts, Auto Enter preference, model catalog, startup registration, updater security and readable **1.2.4** update palettes are retained. [Release history →](CHANGELOG.md)
+**Retained from 1.2.5:** default-on saved position lock; Tiny/Extra small/Small/Medium/Large; live saved voice-bar color/height and 50–100% opacity; and one ordered **5/10/15/Never/Immediately after pasting** unload dropdown. The landscape three-column settings, supplied logo, model catalog, native engines, focus/selection, whole-session insertion, startup and updater safeguards are retained. [Release history →](CHANGELOG.md)
+
+<p align="center"><img src="assets/popup-settings.png" width="1000" alt="Unchanged three-column settings with popup appearance and one unload policy"></p>
+<p align="center">Tiny &nbsp; <img src="assets/popup-tiny.png" alt="Tiny centered-mic popup"> &nbsp; Extra small &nbsp; <img src="assets/popup-extra-small.png" alt="Extra small centered-mic popup"></p>
 
 ### Readable updates retained
 
@@ -53,7 +56,7 @@ The updater uses explicit active/inactive/disabled palettes in both themes, incl
 ## Install on Windows
 
 1. Open the **[latest release](https://github.com/Comet-Suite/dictate-desktop/releases/latest)**.
-2. Download `Dictate-Setup-1.2.5-x64.exe` and run it.
+2. Download `Dictate-Setup-1.2.6-x64.exe` and run it.
 3. Open **Dictate** from the Start menu.
 4. In **Settings → Speech model**, download a supported model or select a compatible `.gguf` file.
 5. Wait for the model to load, then click into the text box where you want your words.
@@ -80,7 +83,7 @@ The app checks its saved startup preference on a manual launch. The installer al
 
 If Windows still prevents startup, check **Windows Settings → Apps → Startup → Dictate** (or Task Manager → Startup apps) and enable it there. Dictate does not bypass Windows startup-app restrictions or administrator policies. Windows can delay startup applications while sign-in completes.
 
-To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.5** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
+To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate from its tray menu and run the **1.2.6** installer once. Keep your existing **Start on startup** preference enabled. Your settings and model files are retained.
 
 ## Record, pause, finish
 
@@ -89,15 +92,15 @@ To upgrade an existing **1.2.0** installation, finish dictation, quit Dictate fr
 | Show / hide | `Ctrl` + `Alt` + `D` | Toggle the floating pop-up; preload its selected model when showing it. No recording. |
 | Dictation | `Ctrl` + `Alt` + `Space` | First press: record. Second press: insert the complete recording. |
 
-Both shortcuts are configurable in Settings. Existing two-shortcut settings are preserved. If you used the single-shortcut build, its recording key is retained and the default show/hide key is restored.
+Both shortcuts are configurable in Settings, including supported Win-key combinations. Existing distinct two-shortcut settings are preserved. Assigning a duplicate clears the older binding. If a legacy settings file already contains duplicates, the dictation binding is kept; Show / hide is cleared rather than registering both actions on one chord.
 
 1. Put the cursor in the destination text box.
-2. Press the **dictation shortcut**.
+2. Press the **dictation shortcut** or click the popup’s centered **mic**.
 3. Speak for as long as you need. You can pause without sending anything.
-4. Press the same shortcut again.
-5. Dictate inserts the assembled text once. **Auto Enter**, if enabled, sends Enter once afterwards.
+4. Press the same shortcut again, or hover and click **✓**.
+5. Dictate inserts the assembled text once and hides the popup. **Auto Enter**, if enabled, sends Enter once afterwards.
 
-The microphone and pause controls remain available in the pop-up. Automatic microphone mode is separate from explicit shortcut recordings.
+While recording, hover over the bars for **✕ / Pause–Resume / ✓**. **✕** discards, hides and safely unloads without quitting the tray app. Neither a long pause nor the Pause button commits a recording. Both the mic and dictation shortcut use explicit whole-session start/finish, irrespective of the retained legacy Stop-mode preference.
 
 ### New lines without sending
 
@@ -153,14 +156,14 @@ Use **Settings → Speech model → UNLOAD**. There is one timing control, not o
 | **5 minutes idle** | Keep the model ready between insertions; unload after at least 5 idle minutes. |
 | **10 minutes idle** | The same policy with a 10-minute idle interval. |
 | **15 minutes idle** | The same policy with a 15-minute idle interval. |
-| **Never** | Keep the selected model loaded until it is replaced or Dictate exits. |
+| **Never** | Keep the selected model loaded until an explicit discard, replacement or exit. |
 | **Immediately after pasting** | Release model RAM only after a successful complete insertion; the default for new settings. |
 
 Idle timers are checked approximately every 15 seconds. Recording, speech processing, model loading and queued transcription/paste work block unloading. Immediately does not mean unloading on Stop, during insertion, or after empty/failed insertion. Native-worker teardown releases that model process, not every byte used by the Qt application.
 
 Showing the popup with **Show / Hide** or the tray preloads the selected model in the background without starting recording. Hiding it does not load a model. Startup remains lazy; the saved model is not eagerly loaded just because Dictate launches. A model is not repeatedly reloaded while an already-visible popup sits on screen after a paste.
 
-The **dictation shortcut** is separate: it can reload an unloaded model and record after that explicit Start request. Press again during loading to cancel the recording intent. Immediately also turns legacy auto-mode listening off after successful insertion; select an idle interval or Never if you want to keep that model available for continuous use. The small Settings microphone-level monitor is separate from native-model memory.
+The **mic and dictation shortcut** are explicit Start requests: either can reload an unloaded model and then record. Press the dictation shortcut again during loading, or hover and click ✕, to cancel the start intent. Repeated mic clicks cannot toggle that intent off or queue duplicate starts. Immediately also turns legacy auto-mode listening off after successful insertion; select an idle interval or Never if you want to keep that model available for continuous use. The small Settings microphone-level monitor is separate from native-model memory.
 
 **Upgrading old settings:** an enabled old *Unload after pasting* switch becomes **Immediately after pasting**. If it was disabled, the old 5/10/15/Never idle choice is kept. An older settings file with only the idle value keeps that value. The obsolete lifecycle keys are removed from the in-memory settings and the next normal preference save writes the single policy; all unrelated/unknown preferences and model files are retained. Popup preloading is now automatic when explicitly showing it.
 
@@ -198,7 +201,7 @@ The application source remains a **single Python file**. Its logo is embedded, s
 
 ```powershell
 python -m pip install -r requirements-build.txt
-powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.5
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Version 1.2.6
 ```
 
 See **[Windows build instructions](docs/BUILDING.md)** for Inno Setup prerequisites, smoke tests, dependency notices, and release verification. Tagged releases are built on Windows through GitHub Actions, tested after installation, and published with checksums.
@@ -217,8 +220,9 @@ Native runtime compatibility and application behavior are tested separately. Phy
 
 - **The updated app does not open:** quit the running copy from its tray menu first. Dictate prevents duplicate instances.
 - **The popup will not drag:** position lock is enabled by default. Unlock it under Pop-up position, or choose a preset without unlocking.
+- **Where did Settings go?** Right-click the popup or use the tray menu. Recording controls appear only on hover.
 - **The microphone is quiet:** select the correct input device and verify the level meter in Settings.
-- **A shortcut does not work:** choose an unused combination; another app may already own it.
+- **A shortcut does not work:** ordinary chords can already belong to another app. Supported assigned Win chords use runtime interception, not permanent policy changes. Security/secure-desktop shortcuts and competing/elevated applications are not guaranteed; [see limits](docs/SHORTCUTS.md).
 - **Text does not paste into a protected application:** test with a normal text editor. Elevated or clipboard-restricted apps may need special permissions or may reject simulated input.
 - **The old icon remains pinned:** unpin the old shortcut, launch the installed `Dictate.exe`, and pin that instance again. Windows can cache icons from older shortcuts.
 - **Recognition is slow:** try a smaller quantization, keep the model loaded, and reduce competing CPU workloads. Background transcription reduces the post-stop wait but cannot make every model real-time on every processor.

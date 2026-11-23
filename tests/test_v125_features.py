@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QFrame, QPushButton, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dictate as m
+from v126_scope import V126_AUTHORIZED
 from test_targeted_fix import Engine, feed, until
 from test_focus_symbols import pump
 
@@ -38,7 +39,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(canonical(value), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-@pytest.mark.parametrize('name', FIXTURE['protected_ast'])
+@pytest.mark.parametrize('name', [name for name in FIXTURE['protected_ast'] if name not in V126_AUTHORIZED])
 def test_unrelated_paths_and_unchanged_ui_methods_match_actual_v124(name):
     parts = name.split('.')
     node = next(n for n in SOURCE_TREE.body if getattr(n, 'name', '') == parts[0])
@@ -207,12 +208,15 @@ def test_idle_policy_never_interrupts_active_loading_or_pending_work(ui, choice,
 
 
 @pytest.mark.parametrize('size', list(m.SIZES))
-def test_new_sizes_keep_original_sizes_and_four_nonoverlapping_usable_targets(ui, size):
-    _, _, state, d, p = ui
+def test_sizes_keep_original_dimensions_and_three_hover_targets(ui, size):
+    _, e, state, d, p = ui
     d.size.setCurrentIndex(d.size.findData(size))
     k = m.SIZES[size]
     assert (p.width(), p.height()) == (int(252*k), int(80*k))
     assert {'small': .8, 'medium': 1.0, 'large': 1.3}.items() <= m.SIZES.items()
+    e.recording = True  # render state only; no microphone
+    p.inside, p.controls_blend = True, 1.0
+    assert len(p._centers()) == 3
     for i, center in enumerate(p._centers()):
         center *= k
         assert p._hit(center) == i
@@ -221,9 +225,9 @@ def test_new_sizes_keep_original_sizes_and_four_nonoverlapping_usable_targets(ui
         assert 11 <= center.x() <= p.width() - 11
         assert 11 <= center.y() <= p.height() - 11
     centers = p._centers()
-    for i in range(3):
-        radii = [max(base*k, 11) for base in (20, 24, 20, 15)]
-        assert (centers[i+1].x() - centers[i].x())*k > radii[i] + radii[i+1]
+    for i in range(2):
+        radius = max(20*k, 11)
+        assert (centers[i+1].x() - centers[i].x())*k > radius*2
     assert p._hit(QPointF(0, 0)) == -1
     assert p.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
     assert p.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -245,7 +249,7 @@ def gesture(p, delta, index=1):
 
 
 @pytest.mark.parametrize('size', list(m.SIZES))
-@pytest.mark.parametrize('index', [0, 1, 2, 3, -1])
+@pytest.mark.parametrize('index', [0, 1, 2, -1])
 def test_default_lock_cancels_drag_release_without_moving_clicking_or_saving(ui, size, index):
     _, e, state, d, p = ui
     p.set_scale(m.SIZES[size]); p.move(180, 120)
@@ -261,22 +265,18 @@ def test_default_lock_cancels_drag_release_without_moving_clicking_or_saving(ui,
 
 
 @pytest.mark.parametrize('size', list(m.SIZES))
-@pytest.mark.parametrize('index', [0, 1, 2, 3])
-def test_locked_popup_buttons_remain_clickable_at_every_size(ui, size, index):
+@pytest.mark.parametrize('index', [0, 1, 2])
+def test_locked_popup_hover_buttons_remain_clickable_at_every_size(ui, size, index):
     _, e, state, d, p = ui
     p.set_scale(m.SIZES[size]); p.show()
-    requested = []; p.settings_requested.connect(lambda: requested.append(True))
-    e.listening = True; e.toggle_pause = Mock(); e.set_listening = Mock()
+    requested = []
+    for name in ('cancel', 'pause', 'commit'):
+        getattr(p, name + '_requested').connect(lambda name=name: requested.append(name))
+    e.recording = True
+    p.inside, p.controls_blend = True, 1.0
     center = p._centers()[index]*p.k
     QTest.mouseClick(p, Qt.MouseButton.LeftButton, pos=center.toPoint())
-    if index == 0:
-        e.toggle_pause.assert_called_once()
-    elif index == 1:
-        e.set_listening.assert_called_once_with(False)
-    elif index == 2:
-        assert requested == [True]
-    else:
-        assert p.user_hidden
+    assert requested == [('cancel', 'pause', 'commit')[index]]
     assert state['popup_locked']
 
 
@@ -371,7 +371,7 @@ def test_custom_bars_render_without_clipping_at_all_heights_sizes_and_themes(ui,
     d.size.setCurrentIndex(d.size.findData(size))
     d.bar_height.setCurrentIndex(d.bar_height.findData(height))
     d._set_bar_color('#29b6f6')
-    e.listening = e.speaking = True; e.level = .06
+    e.recording = e.listening = e.speaking = True; e.level = .06
     for _ in range(70): p._tick()
     assert 0 < min(p.bars) <= max(p.bars) < p.PH - 10
     assert max(p.bars) <= 31*m.BAR_HEIGHTS[height] + .01
@@ -391,7 +391,9 @@ def test_popup_packaging_check_renders_all_ten_cases_without_audio_or_installati
     assert report['minimum_hit_target_px'] == 22 and report['synthetic_mouse_events']
     assert {case['size'] for case in report['rendered_cases']} == set(m.SIZES)
     assert all(case['locked_drag_blocked'] and case['unlocked_drag_works']
-               and case['locked_settings_button_works'] and abs(case['opacity_after_fades'] - .65) < .01
+               and case['right_click_settings_works'] and case['locked_controls_work']
+               and case['hover_only_controls'] and case['waveform_behind_controls']
+               and abs(case['opacity_after_fades'] - .65) < .01
                for case in report['rendered_cases'])
 
 

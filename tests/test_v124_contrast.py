@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QFrame
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dictate as m
+from v126_scope import V126_AUTHORIZED
 from test_focus_symbols import pump
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +36,7 @@ V125_AUTHORIZED = {'load_settings', 'Pill', 'SettingsDialog', 'App.__init__',
                    'App.toggle_popup', 'App.on_unloaded', 'App.reload_model'}
 
 
-@pytest.mark.parametrize('name', [name for name in FIXTURE['protected_ast'] if name not in V125_AUTHORIZED])
+@pytest.mark.parametrize('name', [name for name in FIXTURE['protected_ast'] if name not in V125_AUTHORIZED | V126_AUTHORIZED])
 def test_contrast_patch_does_not_change_other_application_behavior(name):
     parts = name.split('.')
     node = next(n for n in ast.parse((ROOT/'dictate.py').read_text()).body if getattr(n, 'name', '') == parts[0])

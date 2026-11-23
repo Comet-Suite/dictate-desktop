@@ -5,10 +5,19 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing version tag to build
+      ref:
+        description: Exact commit, branch or existing tag to verify
         required: true
-        default: v1.2.5
+        default: main
+      tag:
+        description: Version tag matching the source metadata
+        required: true
+        default: v1.2.6
+      publish:
+        description: Publish only after verification (requires the version tag to exist)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -16,6 +25,8 @@ permissions:
 jobs:
   regression:
     uses: ./.github/workflows/tests.yml
+    with:
+      ref: ${{ inputs.ref || github.sha }}
   build:
     needs: regression
     name: Build and verify Windows installer
@@ -24,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -40,6 +51,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
+      - name: Verify native keyboard capture and teardown before packaging
+        shell: pwsh
+        run: python tools/check_windows_shortcuts.py --report release/smoke-keyboard-source.json
       - name: Ensure Inno Setup is available
         shell: pwsh
         run: |
@@ -67,6 +81,7 @@ jobs:
           retention-days: 14
           compression-level: 0
       - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,10 +90,14 @@ jobs:
           $files = Get-ChildItem release -File | Where-Object {
             $_.Extension -in ".exe", ".zip" -or $_.Name -in "SHA256SUMS.txt", "requirements-build-resolved.txt", "smoke-frozen.json", "smoke-installed.json"
           } | ForEach-Object { $_.FullName }
+          git fetch --no-tags --depth=1 origin "refs/tags/$($env:RELEASE_TAG):refs/tags/$($env:RELEASE_TAG)"
+          if ($LASTEXITCODE -ne 0) { throw "The publication tag does not exist or could not be fetched." }
+          $sourceCommit = git rev-parse HEAD
+          $tagCommit = git rev-parse "$($env:RELEASE_TAG)^{commit}"
+          if ($sourceCommit -ne $tagCommit) { throw "Refusing to publish bytes from a different commit than the release tag." }
           gh release view $env:RELEASE_TAG *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:RELEASE_TAG @files --clobber
-          } else {
-            gh release create $env:RELEASE_TAG @files --verify-tag --title "Dictate $($env:RELEASE_TAG.Substring(1)) for Windows" --notes-file RELEASE_NOTES.md
+            throw "Refusing to overwrite an existing release or its historical assets."
           }
+          gh release create $env:RELEASE_TAG @files --verify-tag --title "Dictate $($env:RELEASE_TAG.Substring(1)) for Windows" --notes-file RELEASE_NOTES.md
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }

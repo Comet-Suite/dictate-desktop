@@ -1,29 +1,26 @@
-# Dictate 1.2.5
+# Dictate 1.2.6
 
-## Popup controls, without a redesign
+## Recording popup: controls only when you need them
 
-- **Saved position lock, enabled by default.** Accidental drag gestures no longer move the popup or trigger a button on release. Normal microphone, pause, settings and close clicks still work. Choose a preset while locked, or unlock to drag deliberately.
-- **Tiny and Extra small** sizes alongside the existing Small, Medium and Large capsule sizes. All four controls retain usable hit targets.
-- **Live, saved appearance controls:** Purple/Blue/Green/Amber or a custom voice-bar color; 50–100% popup opacity; Subtle/Normal/Taller voice bars. Fade-in and hide/show preserve the chosen opacity.
+- **Click the centered mic to record.** An unloaded model is loaded first, then recording starts from that explicit click. Showing/preloading the popup alone does not record.
+- During recording, **only moving bars show by default**. Hover to reveal **✕ Cancel · Pause/Resume · ✓ Paste on top of the waveform**. Move away to hide the buttons. Right-click for **Settings**; the gear is removed.
+- **✕** discards without pasting, hides and safely unloads the model after active work finishes. Dictate remains in the tray.
+- **✓** inserts the entire session once, honors **Auto Enter**, and hides the popup. Pauses never submit or discard a recording.
 
-## One model unload choice
+## Win-key shortcuts, without changing your defaults
 
-**Settings → Speech model → UNLOAD** now contains exactly:
+The defaults remain **Ctrl+Alt+D** for Show / hide and **Ctrl+Alt+Space** for dictation. Both shortcut boxes now accept supported **Win/Windows/Meta** combinations, including **Win+H** and **Win+V**.
 
-1. **5 minutes idle**
-2. **10 minutes idle**
-3. **15 minutes idle**
-4. **Never**
-5. **Immediately after pasting**
+Assigning a duplicate automatically removes the older Dictate assignment. Cleared bindings stop running; failed registration attempts restore the previous bindings where available. Editing a shortcut does not activate the existing action.
 
-This replaces the two unload/preload switches and manual unload control. Showing the popup still preloads the selected model **without recording**. Immediately releases the native model only after successful complete insertion, never during a recording, model loading or queued work. An enabled old post-paste setting migrates to Immediately; otherwise the existing idle choice is retained.
+Supported assigned Win chords are intercepted **only while Dictate runs**, suppressing the matched native Windows action. Unassign or quit to restore normal delivery. There are no permanent registry/policy changes. **Win+L, Ctrl+Alt+Delete, secure desktops, elevated applications and competing third-party hooks are not override guarantees.** See the [shortcut guide](https://github.com/Comet-Suite/dictate-desktop/blob/main/docs/SHORTCUTS.md).
 
-## Preserved
+## Retained
 
-The landscape three-column settings layout, capsule design, supplied logo, model catalog/downloads, true Unified and CrispASR engines, both shortcuts, explicit whole-session insertion, Auto Enter preference, numbers/symbols/custom mappings, startup registration and updater protections are retained. The readable dark/light updater palettes from 1.2.4 remain in place.
+All five popup sizes, default-on position lock, saved bar color/height and opacity, the single **5/10/15/Never/Immediately after pasting** unload choice, three-column settings, supplied logo, model catalog/downloads, true Parakeet Unified and CrispASR runtimes, focus/selection, one complete paste, number/symbol/custom mapping conversion, startup and updater safeguards remain.
 
 ## Upgrade
 
-Choose **Check for updates**, then approve **Install and restart**, or quit Dictate and run `Dictate-Setup-1.2.5-x64.exe` from this release into the existing installation folder. Settings, custom mappings, shortcuts, model files and startup preference are retained; old memory-control settings are migrated to one policy.
+Choose **Check for updates → Install and restart**, or quit the running copy and run `Dictate-Setup-1.2.6-x64.exe` into the existing installation folder. Settings, distinct shortcuts, model files, custom mappings, popup appearance/position and startup preference are retained. Historical releases are not replaced.
 
-An already-running older app continues drawing its old interface until it restarts. The installer remains unsigned: use official downloads and verify `SHA256SUMS.txt`. Automated tests use synthetic popup/mouse/audio input where noted; no physical microphone recording or reboot is claimed.
+The installer remains **unsigned**. Use official downloads and verify `SHA256SUMS.txt`. Automated verification uses synthetic audio, mouse and tagged keyboard input where stated; no physical microphone recording, physical keyboard or reboot test is claimed.

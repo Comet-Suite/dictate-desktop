@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Comet-Suite
 # Distributed under GPL-3.0; see LICENSE. No warranty.
 """
-Dictate 1.2.5  -  system-wide offline dictation
+Dictate 1.2.6  -  system-wide offline dictation
 PyQt6 UI + NVIDIA Parakeet Unified / TDT GGUF (local CPU runtimes)
 
 Install:
@@ -22,7 +22,10 @@ How to use:
     5. Press the same shortcut again to type the whole recording once.
        The existing Auto Enter setting controls whether Enter is sent once.
     Show / hide shortcut: Ctrl+Alt+D. Dictation shortcut: Ctrl+Alt+Space.
-    Mic icon = microphone on/off. Left button = pause/resume.
+    Idle mic = start recording. While recording: bars only; hover for
+    Cancel (discard/hide/unload), Pause/Resume and Paste (commit once/hide).
+    Right-click the popup for Settings. Win/Windows/Meta chords are supported;
+    assigning one of the two Dictate shortcuts clears an older duplicate.
     The shortcut always uses explicit start/commit, even if Stop mode is Auto.
     Unified model: handy-computer/parakeet-unified-en-0.6b-gguf.
     Natural amounts: "four hundred dollars" -> $400; "400 rupees" -> ₹400.
@@ -104,7 +107,7 @@ from PyQt6.QtWidgets import (QAbstractButton, QApplication, QColorDialog, QCombo
                              QHBoxLayout, QKeySequenceEdit, QLabel, QLineEdit, QMenu, QPlainTextEdit,
                              QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSystemTrayIcon, QVBoxLayout, QWidget)
 
-APP_NAME, VERSION = "Dictate", "1.2.5"
+APP_NAME, VERSION = "Dictate", "1.2.6"
 APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / APP_NAME
 SETTINGS_FILE = APP_DIR / "settings.json"
 DEFAULTS = {"dark_mode": True, "start_on_startup": False, "model_path": "",
@@ -804,7 +807,7 @@ class _DictationShortcutFilter(QObject):
                 return False
             focus = focus.parentWidget()
         sequence = app.settings.get("dict_hotkey", "")
-        if sequence and QKeySequence(event.keyCombination()) == QKeySequence(sequence):
+        if sequence and QKeySequence(event.keyCombination()) == QKeySequence(_canonical_hotkey(sequence) or sequence):
             event.accept()
             return True
         return False
@@ -919,7 +922,10 @@ def load_settings():
             s.update(saved)
     except Exception:
         pass
-    return _normalise_ui_settings(s)
+    s = _normalise_ui_settings(s)
+    if _same_hotkey(s.get('hotkey', ''), s.get('dict_hotkey', '')):
+        s['hotkey'] = ''  # retain dictation if an older file contains duplicate bindings
+    return s
 
 
 def save_settings(s):
@@ -3284,12 +3290,15 @@ class Toast(_NoActivatePopup):
 
 # ------------------------------------------------------------------- popup
 class Pill(_NoActivatePopup):
-    PW, PH, M = 232, 60, 10            # pill size and transparent margin (room for the shadow)
+    PW, PH, M = 232, 60, 10
     settings_requested = pyqtSignal()
     quit_requested = pyqtSignal()
     dragged = pyqtSignal()
     notify = pyqtSignal(str)
-    reload_requested = pyqtSignal()
+    record_requested = pyqtSignal()
+    cancel_requested = pyqtSignal()
+    pause_requested = pyqtSignal()
+    commit_requested = pyqtSignal()
 
     def __init__(self, engine, settings):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint |
@@ -3297,23 +3306,26 @@ class Pill(_NoActivatePopup):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
-        self.k = SIZES.get(settings.get("size", "medium"), 1.0)
+        self.k = SIZES.get(settings.get('size', 'medium'), 1.0)
         self.setFixedSize(int((self.PW + 2 * self.M) * self.k), int((self.PH + 2 * self.M) * self.k))
         self.engine, self.settings = engine, settings
         self._press, self._moved = None, False
         self._press_control, self._drag_allowed, self._dragging = -1, False, False
+        self._press_mode = 'idle'
         self._target_opacity = _popup_opacity(settings)
         self.setWindowOpacity(self._target_opacity)
-        self.blend = 0.0                       # 0 = mic, 1 = speaking bars
-        self.bars = [6.0] * 5
-        self.hov = [0.0] * 4
-        self.hov_t = [0.0] * 4
-        self.xh, self.inside, self.user_hidden = 0.0, False, False
+        self.preparing = False
+        self._closing_mode = None
+        self.blend, self.controls_blend = 0.0, 0.0
+        self.bars = [6.0] * 27
+        self.hov = [0.0] * 3
+        self.hov_t = [0.0] * 3
+        self.inside, self.user_hidden = False, False
         self._sig = None
-        self.glide = QPropertyAnimation(self, b"pos", self)
+        self.glide = QPropertyAnimation(self, b'pos', self)
         self.glide.setDuration(380)
         self.glide.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self.fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self.fade = QPropertyAnimation(self, b'windowOpacity', self)
         self.fade.setDuration(350)
         self.fade.finished.connect(self._fade_done)
         self.timer = QTimer(self, interval=16)
@@ -3323,6 +3335,8 @@ class Pill(_NoActivatePopup):
         self.guard = QTimer(self, interval=600)
         self.guard.timeout.connect(self.keep_visible)
         self.guard.start()
+        self.setToolTip('Click the mic to record. Right-click for Settings.')
+        self.setAccessibleName('Dictate microphone. Right-click for Settings.')
 
     def set_scale(self, k):
         self.k = k
@@ -3368,9 +3382,13 @@ class Pill(_NoActivatePopup):
             if fixed != self.pos():
                 self.glide_to(fixed)
 
-    def hide_popup(self):
-        """Close button: hide the pop-up, keep Dictate running in the background."""
+    def hide_popup(self, *, closing_mode=None):
+        """Hide without flashing an idle mic after a finished/discarded recording."""
+        self._closing_mode = closing_mode or self.view_mode()
         self.user_hidden = True
+        self.inside = False
+        self.controls_blend = 0.0
+        self.hov_t = [0.0] * 3
         self.fade.stop()
         self.fade.setStartValue(self.windowOpacity())
         self.fade.setEndValue(0.0)
@@ -3384,9 +3402,11 @@ class Pill(_NoActivatePopup):
     def _fade_done(self):
         if self.user_hidden:
             self.hide()
+            self._closing_mode = None
         self.setWindowOpacity(_popup_opacity(self.settings))
 
     def fade_in(self):
+        self._closing_mode = None
         self.user_hidden = False
         self.fade.stop()
         self._target_opacity = _popup_opacity(self.settings)
@@ -3402,60 +3422,91 @@ class Pill(_NoActivatePopup):
         self.glide.setEndValue(pt)
         self.glide.start()
 
+    def set_preparing(self, on):
+        self.preparing = bool(on)
+        self._sig = None
+        self.update()
+
+    def view_mode(self):
+        if self.user_hidden and self._closing_mode is not None:
+            return self._closing_mode
+        if self.engine.recording:
+            return 'paused' if self.engine.paused else 'recording'
+        if self.preparing:
+            return 'preparing'
+        if self.engine.pending or self.engine.busy:
+            return 'finishing'
+        return 'idle'
+
     def _centers(self):
-        """pause, mic, settings, close - the close button sits fully inside the rounded end."""
+        """Cancel, pause/resume (or idle mic), confirm/paste."""
         cy = self.M + self.PH / 2
-        return (QPointF(self.M + 38, cy), QPointF(self.M + 90, cy),
-                QPointF(self.M + 142, cy), QPointF(self.M + 194, cy))
+        return (QPointF(self.M + 38, cy), QPointF(self.M + self.PW / 2, cy),
+                QPointF(self.M + 194, cy))
+
+    def _button_enabled(self, index):
+        mode = self.view_mode()
+        if mode == 'idle':
+            return index == 1
+        if mode == 'preparing':
+            return index == 0
+        return mode in ('recording', 'paused')
 
     def _tick(self):
-        eng = self.engine
+        eng, mode = self.engine, self.view_mode()
         self._t += 0.016
-        speaking = eng.speaking and eng.active
         old = self.blend
-        self.blend += ((1.0 if speaking else 0.0) - self.blend) * 0.22
-        if abs(self.blend - (1.0 if speaking else 0.0)) < 0.01:
-            self.blend = 1.0 if speaking else 0.0
+        target = 0.0 if mode == 'idle' else 1.0
+        self.blend += (target - self.blend) * .22
+        if abs(self.blend - target) < .01:
+            self.blend = target
         dirty = self.blend != old
         if self.blend > 0:
-            amp = min(1.0, eng.level * 22)
-            for i in range(5):
-                height = BAR_HEIGHTS.get(self.settings.get("voice_bar_height", "normal"), 1.0)
-                tgt = height * (7 + amp * 24 * (0.4 + 0.6 * abs(math.sin(self._t * 9 + i * 1.4))))
-                self.bars[i] += (tgt - self.bars[i]) * 0.35
-            dirty = True
-        tx = 1.0 if self.inside else 0.0
-        if abs(tx - self.xh) > 0.01:
-            self.xh += (tx - self.xh) * 0.3
-            dirty = True
-        for i in range(4):
+            if mode != 'paused':
+                amp = max(.08, min(1.0, max(0.0, eng.level) * 22)) if mode == 'recording' else .12
+                height = BAR_HEIGHTS.get(self.settings.get('voice_bar_height', 'normal'), 1.0)
+                for i in range(len(self.bars)):
+                    pulse = .4 + .6 * abs(math.sin(self._t * 9 + i * .8))
+                    tgt = height * (7 + amp * 24 * pulse)
+                    self.bars[i] += (tgt - self.bars[i]) * .35
+                dirty = True
+        controls = 1.0 if self.inside and mode != 'idle' else 0.0
+        old = self.controls_blend
+        self.controls_blend += (controls - self.controls_blend) * .3
+        if abs(self.controls_blend - controls) < .01:
+            self.controls_blend = controls
+        dirty |= old != self.controls_blend
+        for i in range(3):
             d = self.hov_t[i] - self.hov[i]
-            if abs(d) > 0.005:
-                self.hov[i] += d * 0.3
+            if abs(d) > .005:
+                self.hov[i] += d * .3
                 dirty = True
         if _popup_opacity(self.settings) != self._target_opacity:
             self.apply_appearance()
             dirty = True
-        sig = (eng.listening, eng.paused, eng.active, self.settings["dark_mode"],
-               self.settings.get("voice_bar_color"), self.settings.get("voice_bar_height"))
+        sig = (mode, self.settings['dark_mode'], self.settings.get('voice_bar_color'),
+               self.settings.get('voice_bar_height'))
         if sig != self._sig:
             self._sig = sig
+            text = {'idle': 'Click the mic to record. Right-click for Settings.',
+                    'recording': 'Recording. Hover for Cancel, Pause and Paste. Right-click for Settings.',
+                    'paused': 'Paused. Hover to resume, cancel or paste.',
+                    'preparing': 'Loading model — recording starts when ready. Hover to cancel.',
+                    'finishing': 'Finishing your recording — one paste; no extra recording.'}[mode]
+            self.setToolTip(text)
+            self.setAccessibleName(text)
             dirty = True
         if dirty:
             self.update()
 
     def paintEvent(self, e):
-        dark = self.settings["dark_mode"]
-        bg = QColor("#1f1f24") if dark else QColor("#ffffff")
-        fg = QColor("#f2f2f2") if dark else QColor("#111111")
-        dim = QColor("#777777")
-        eng = self.engine
+        dark, mode = self.settings['dark_mode'], self.view_mode()
+        bg = QColor('#1f1f24') if dark else QColor('#ffffff')
+        fg = QColor('#f2f2f2') if dark else QColor('#111111')
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.scale(self.k, self.k)
         M, PW, PH = self.M, self.PW, self.PH
-
-        # soft shadow
         p.setPen(Qt.PenStyle.NoPen)
         for i in range(6):
             p.setBrush(QColor(0, 0, 0, 16))
@@ -3463,77 +3514,77 @@ class Pill(_NoActivatePopup):
         p.setPen(QPen(QColor(128, 128, 128, 80), 1))
         p.setBrush(bg)
         p.drawRoundedRect(QRectF(M, M, PW, PH), PH / 2, PH / 2)
-        pc, mc, gc_, cc = self._centers()
-        p.setPen(Qt.PenStyle.NoPen)
-
-        # hover halos
-        for c, h in zip((pc, mc, gc_), self.hov):
-            if h > 0.01:
-                p.setBrush(QColor(128, 128, 128, int(55 * h)))
-                p.drawEllipse(c, 19, 19)
-
-        # pause / play
-        p.setBrush(fg if eng.listening else dim)
-        p.drawEllipse(pc, 12, 12)
-        p.setBrush(bg)
-        if eng.paused:
-            p.drawPolygon(QPolygonF([QPointF(pc.x() - 3, pc.y() - 5), QPointF(pc.x() - 3, pc.y() + 5),
-                                     QPointF(pc.x() + 5, pc.y())]))
-        else:
-            p.drawRoundedRect(QRectF(pc.x() - 4.5, pc.y() - 5, 3, 10), 1, 1)
-            p.drawRoundedRect(QRectF(pc.x() + 1.5, pc.y() - 5, 3, 10), 1, 1)
-
-        # centre: mic <-> voice bars (cross-fade)
-        if self.blend < 0.99:
-            p.setOpacity(1.0 - self.blend)
-            col = fg if eng.active else dim
-            p.setBrush(col)
-            p.drawRoundedRect(QRectF(mc.x() - 4.5, mc.y() - 13, 9, 15), 4.5, 4.5)
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(col, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-            p.drawArc(QRectF(mc.x() - 8.5, mc.y() - 6, 17, 14), 180 * 16, 180 * 16)
-            p.drawLine(QPointF(mc.x(), mc.y() + 8), QPointF(mc.x(), mc.y() + 12))
-            p.drawLine(QPointF(mc.x() - 5, mc.y() + 12), QPointF(mc.x() + 5, mc.y() + 12))
+        centers = self._centers()
+        cy = centers[1].y()
+        # Draw the waveform FIRST. Hover controls are a separate top layer,
+        # never a row above it or a replacement for it.
+        if self.blend > .01:
             p.setPen(Qt.PenStyle.NoPen)
-        if self.blend > 0.01:
-            p.setOpacity(self.blend)
+            p.setOpacity(self.blend * (.4 if mode == 'paused' else 1.0))
             p.setBrush(_voice_bar_color(self.settings))
-            for i, h in enumerate(self.bars):
-                p.drawRoundedRect(QRectF(mc.x() - 27 + i * 12, mc.y() - h / 2, 6, h), 3, 3)
+            for i, height in enumerate(self.bars):
+                x = centers[1].x() + (i - (len(self.bars) - 1) / 2) * 8
+                p.drawRoundedRect(QRectF(x - 2, cy - height / 2, 4, height), 2, 2)
         p.setOpacity(1.0)
-
-        # settings gear
-        p.save()
-        p.translate(gc_)
-        p.setBrush(fg)
-        for i in range(8):
-            p.save()
-            p.rotate(i * 45)
-            p.drawRoundedRect(QRectF(-2.2, -12, 4.4, 6), 1, 1)
-            p.restore()
-        p.drawEllipse(QPointF(0, 0), 8, 8)
-        p.setBrush(bg)
-        p.drawEllipse(QPointF(0, 0), 3.2, 3.2)
-        p.restore()
-
-        # close button: a proper round badge, fully inside the pill
-        hot = self.hov[3] > 0.5
-        p.setOpacity(0.55 + 0.45 * self.xh)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#ff453a") if hot else QColor(128, 128, 140, 70))
-        p.drawEllipse(cc, 11, 11)
-        p.setPen(QPen(QColor("white") if hot else (fg if dark else QColor("#555555")), 1.8,
-                      Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        d = 3.6
-        p.drawLine(QPointF(cc.x() - d, cc.y() - d), QPointF(cc.x() + d, cc.y() + d))
-        p.drawLine(QPointF(cc.x() - d, cc.y() + d), QPointF(cc.x() + d, cc.y() - d))
+        if mode == 'idle':
+            c = centers[1]
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor('#303039') if dark else QColor('#f0f0f5'))
+            p.drawEllipse(c, 20, 20)
+            p.setBrush(fg)
+            p.drawRoundedRect(QRectF(c.x() - 4.5, c.y() - 13, 9, 15), 4.5, 4.5)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(fg, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawArc(QRectF(c.x() - 8.5, c.y() - 6, 17, 14), 180 * 16, 180 * 16)
+            p.drawLine(QPointF(c.x(), c.y() + 8), QPointF(c.x(), c.y() + 12))
+            p.drawLine(QPointF(c.x() - 5, c.y() + 12), QPointF(c.x() + 5, c.y() + 12))
+            return
+        if self.controls_blend <= .01:
+            return  # bars only until the pointer hovers over the popup
+        p.setOpacity(self.controls_blend)
+        for index, center in enumerate(centers):
+            enabled = self._button_enabled(index)
+            hot = enabled and self.hov[index] > .5
+            fill = QColor('#34343e') if dark else QColor('#f4f4f8')
+            fill.setAlpha(240)
+            if hot and index == 0:
+                fill = QColor('#d63b46')
+            elif hot and index == 2:
+                fill = QColor('#238441')
+            icon = QColor('#ffffff') if hot and index != 1 else QColor(fg)
+            if not enabled:
+                icon.setAlpha(95)
+            p.setPen(QPen(QColor(128, 128, 140, 100), 1))
+            p.setBrush(fill)
+            p.drawEllipse(center, 18, 18)
+            p.setPen(QPen(icon, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            if index == 0:
+                d = 5
+                p.drawLine(QPointF(center.x() - d, cy - d), QPointF(center.x() + d, cy + d))
+                p.drawLine(QPointF(center.x() - d, cy + d), QPointF(center.x() + d, cy - d))
+            elif index == 2:
+                p.drawPolyline(QPolygonF([QPointF(center.x() - 6, cy), QPointF(center.x() - 1.5, cy + 4.5),
+                                          QPointF(center.x() + 6.5, cy - 5)]))
+            elif mode == 'paused':
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(icon)
+                p.drawPolygon(QPolygonF([QPointF(center.x() - 4, cy - 6), QPointF(center.x() - 4, cy + 6),
+                                         QPointF(center.x() + 6, cy)]))
+            else:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(icon)
+                p.drawRoundedRect(QRectF(center.x() - 5, cy - 6, 3, 12), 1, 1)
+                p.drawRoundedRect(QRectF(center.x() + 2, cy - 6, 3, 12), 1, 1)
         p.setOpacity(1.0)
 
     def _hit(self, pos):
+        if self.view_mode() != 'idle' and (not self.inside or self.controls_blend < .12):
+            return -1
         pos = QPointF(pos.x() / self.k, pos.y() / self.k)
-        for i, (c, r) in enumerate(zip(self._centers(), (20, 24, 20, 15))):
-            r = max(r, 11 / self.k)  # keep all four targets at least 22 px, even at Tiny
-            if (pos.x() - c.x()) ** 2 + (pos.y() - c.y()) ** 2 <= r * r:
+        for i, c in enumerate(self._centers()):
+            r = max(22 if self.view_mode() == 'idle' else 20, 11 / self.k)
+            if self._button_enabled(i) and (pos.x() - c.x()) ** 2 + (pos.y() - c.y()) ** 2 <= r * r:
                 return i
         return -1
 
@@ -3543,6 +3594,7 @@ class Pill(_NoActivatePopup):
             self._press = e.globalPosition().toPoint()
             self._origin = self.pos()
             self._press_control = self._hit(e.position())
+            self._press_mode = self.view_mode()
             self._drag_allowed = not self.settings.get('popup_locked', True)
             self._moved, self._dragging = False, False
 
@@ -3555,9 +3607,9 @@ class Pill(_NoActivatePopup):
                     self._dragging = True
                     self.move(self._origin + d)
             return
-        h = self._hit(e.position())
         self.inside = True
-        self.hov_t = [1.0 if i == h else 0.0 for i in range(4)]
+        h = self._hit(e.position())
+        self.hov_t = [1.0 if i == h else 0.0 for i in range(3)]
         self.setCursor(Qt.CursorShape.PointingHandCursor if h >= 0 else Qt.CursorShape.ArrowCursor)
 
     def enterEvent(self, e):
@@ -3565,7 +3617,9 @@ class Pill(_NoActivatePopup):
 
     def leaveEvent(self, e):
         self.inside = False
-        self.hov_t = [0.0] * 4
+        self.controls_blend = 0.0
+        self.hov_t = [0.0] * 3
+        self.update()
 
     def mouseReleaseEvent(self, e):
         if e.button() != Qt.MouseButton.LeftButton or self._press is None:
@@ -3579,46 +3633,34 @@ class Pill(_NoActivatePopup):
             self._dragging = False
             return
         h = self._hit(e.position())
-        if h != self._press_control:
+        if h != self._press_control or self.view_mode() != self._press_mode:
             return
-        eng = self.engine
-        if h == 0:
-            if eng.listening:
-                eng.toggle_pause()
-                self.notify.emit("Paused" if eng.paused else "Listening - speak now")
-            else:
-                self.notify.emit("Microphone is off - click the mic to start")
+        if self.view_mode() == 'idle' and h == 1:
+            self.record_requested.emit()
+        elif h == 0:
+            self.cancel_requested.emit()
         elif h == 1:
-            if eng.model is None:
-                mp = self.settings["model_path"]
-                if mp and Path(mp).exists():
-                    self.reload_requested.emit()
-                else:
-                    self.notify.emit("Load a model first")
-                    self.settings_requested.emit()
-            else:
-                eng.set_listening(not eng.listening)
-                if eng.listening:
-                    self.notify.emit("Listening - speak now")
-                else:
-                    self.notify.emit("Microphone off")
+            self.pause_requested.emit()
         elif h == 2:
-            self.settings_requested.emit()
-        elif h == 3:
-            self.hide_popup()
+            self.commit_requested.emit()
+
+    def _create_context_menu(self):
+        menu = QMenu(self)
+        settings, quit_action = QAction('Settings', menu), QAction('Quit Dictate', menu)
+        settings.triggered.connect(self.settings_requested.emit)
+        quit_action.triggered.connect(self.quit_requested.emit)
+        menu.addAction(settings)
+        menu.addAction(quit_action)
+        return menu
 
     def contextMenuEvent(self, e):
-        m = QMenu(self)
-        a1, a2 = QAction("Settings", m), QAction("Quit Dictate", m)
-        a1.triggered.connect(self.settings_requested.emit)
-        a2.triggered.connect(self.quit_requested.emit)
-        m.addAction(a1)
-        m.addAction(a2)
-        m.exec(e.globalPos())
+        menu = self._create_context_menu()
+        menu.exec(e.globalPos())
+        menu.deleteLater()
 
 
 def _check_popup_controls(application):
-    """Exercise real Qt popup rendering/events with synthetic input, never audio."""
+    """Render all sizes/themes and exercise synthetic hover/clicks, never audio."""
     from types import SimpleNamespace
     from PyQt6.QtGui import QMouseEvent
     cases = []
@@ -3626,48 +3668,54 @@ def _check_popup_controls(application):
         for size, scale in SIZES.items():
             state = dict(DEFAULTS, dark_mode=dark, size=size, popup_opacity=75,
                          voice_bar_color='#29b6f6', voice_bar_height='taller')
-            engine = SimpleNamespace(listening=False, paused=False, active=False, speaking=False,
-                                     level=0.0, model=None)
+            engine = SimpleNamespace(listening=False, recording=False, paused=False, active=False,
+                                     speaking=False, level=0.0, model=None, pending=0, busy=False)
             pill = Pill(engine, state)
             pill.timer.stop()
             pill.guard.stop()
             pill.glide.setDuration(0)
-            dragged, settings_clicked = [], []
-            pill.dragged.connect(lambda: dragged.append(True))
-            pill.settings_requested.connect(lambda: settings_clicked.append(True))
-            def event(kind, local, global_pos, button=Qt.MouseButton.LeftButton):
-                buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+            actions = collections.Counter()
+            for name in ('record', 'cancel', 'pause', 'commit', 'settings', 'dragged'):
+                signal = getattr(pill, 'dragged' if name == 'dragged' else name + '_requested')
+                signal.connect(functools.partial(actions.update, [name]))
+            def event(kind, local, global_pos, button=Qt.MouseButton.LeftButton, pill=pill):
+                buttons = Qt.MouseButton.LeftButton if kind == QEvent.Type.MouseButtonPress else Qt.MouseButton.NoButton
                 application.sendEvent(pill, QMouseEvent(kind, local, global_pos, button, buttons,
                                                        Qt.KeyboardModifier.NoModifier))
-            def drag():
-                start = QPointF(24 * scale, 18 * scale)
-                offset = QPointF(36, 20)
-                global_start = QPointF(pill.pos()) + start
-                event(QEvent.Type.MouseButtonPress, start, global_start)
-                event(QEvent.Type.MouseMove, start + offset, global_start + offset, Qt.MouseButton.NoButton)
-                event(QEvent.Type.MouseButtonRelease, start + offset, global_start + offset)
+            def click(index, pill=pill, scale=scale):
+                local = pill._centers()[index] * scale
+                at = QPointF(pill.pos()) + local
+                event(QEvent.Type.MouseButtonPress, local, at)
+                event(QEvent.Type.MouseButtonRelease, local, at)
+            def drag(pill=pill, scale=scale):
+                start, offset = QPointF(24 * scale, 18 * scale), QPointF(36, 20)
+                at = QPointF(pill.pos()) + start
+                event(QEvent.Type.MouseButtonPress, start, at)
+                application.sendEvent(pill, QMouseEvent(QEvent.Type.MouseMove, start + offset, at + offset,
+                                                       Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+                                                       Qt.KeyboardModifier.NoModifier))
+                event(QEvent.Type.MouseButtonRelease, start + offset, at + offset)
             try:
                 pill.move(180, 120)
                 pill.show()
                 application.processEvents()
                 origin = pill.pos()
-                for index, center in enumerate(pill._centers()):
-                    assert pill._hit(center * scale) == index, (size, index)
-                    assert pill._hit(center * scale + QPointF(0, 10.9)) == index
+                assert pill._hit(pill._centers()[1] * scale) == 1
+                assert all(pill._hit(pill._centers()[i] * scale) == -1 for i in (0, 2))
                 drag()
-                assert pill.pos() == origin and not dragged and not settings_clicked
-                gear = pill._centers()[2] * scale
-                global_gear = QPointF(pill.pos()) + gear
-                event(QEvent.Type.MouseButtonPress, gear, global_gear)
-                event(QEvent.Type.MouseButtonRelease, gear, global_gear)
-                assert settings_clicked == [True], 'Locked buttons must still work'
+                assert pill.pos() == origin and not actions
+                click(1)
+                assert actions['record'] == 1 and not engine.listening
+                menu = pill._create_context_menu()
+                assert [a.text() for a in menu.actions()] == ['Settings', 'Quit Dictate']
+                menu.actions()[0].trigger()
+                assert actions['settings'] == 1
+                menu.deleteLater()
                 state['popup_locked'] = False
                 pill.apply_appearance()
                 drag()
-                assert pill.pos() == origin + QPoint(36, 20) and dragged == [True]
+                assert pill.pos() == origin + QPoint(36, 20) and actions['dragged'] == 1
                 state['popup_locked'] = True
-                # Fade-in, live changes during a fade, hide, and show must all
-                # preserve the chosen opacity rather than restoring full opacity.
                 pill.fade_in()
                 pill.fade.setCurrentTime(120)
                 state['popup_opacity'] = 65
@@ -3683,21 +3731,47 @@ def _check_popup_controls(application):
                 pill.fade.setCurrentTime(pill.fade.duration())
                 application.processEvents()
                 assert pill.isVisible() and abs(pill.windowOpacity() - .65) < .01
-                engine.active = engine.speaking = True  # visualization only, no microphone
+                engine.recording = engine.speaking = True  # visualization only
                 engine.level = .06
+                pill.leaveEvent(QEvent(QEvent.Type.Leave))
                 for _ in range(60):
                     pill._tick()
+                assert pill.controls_blend == 0 and all(pill._hit(c * scale) == -1 for c in pill._centers())
+                before = list(pill.bars)
+                pill._tick()
+                assert pill.bars != before
                 image = pill.grab().toImage()
                 pixels = sum(image.pixelColor(x, y).name() == state['voice_bar_color']
                              for y in range(image.height()) for x in range(image.width()))
                 assert pixels >= 5 and max(pill.bars) < Pill.PH - 10, (size, pixels, pill.bars)
+                center = pill._centers()[1] * scale
+                event(QEvent.Type.MouseMove, center, QPointF(pill.pos()) + center, Qt.MouseButton.NoButton)
+                for _ in range(30):
+                    pill._tick()
+                assert pill.controls_blend == 1
+                for index, name in enumerate(('cancel', 'pause', 'commit')):
+                    assert pill._hit(pill._centers()[index] * scale) == index
+                    assert pill._hit(pill._centers()[index] * scale + QPointF(0, 10.9)) == index
+                    click(index)
+                    assert actions[name] == 1
+                overlay = pill.grab().toImage()
+                assert overlay != image, 'Hover controls must overlay the still-visible waveform'
+                engine.paused = True
+                frozen = list(pill.bars)
+                for _ in range(10):
+                    pill._tick()
+                assert pill.bars == frozen
+                pill.leaveEvent(QEvent(QEvent.Type.Leave))
+                assert pill.controls_blend == 0 and all(pill._hit(c * scale) == -1 for c in pill._centers())
                 assert pill.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
                 assert pill.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
                 assert not engine.listening
                 cases.append({'theme': 'dark' if dark else 'light', 'size': size,
                               'logical_width': pill.width(), 'logical_height': pill.height(),
                               'custom_color_pixels': pixels, 'locked_drag_blocked': True,
-                              'locked_settings_button_works': True, 'unlocked_drag_works': True,
+                              'right_click_settings_works': True, 'locked_controls_work': True,
+                              'hover_only_controls': True, 'waveform_behind_controls': True,
+                              'pause_freezes_waveform': True, 'unlocked_drag_works': True,
                               'opacity_after_fades': round(pill.windowOpacity(), 3)})
             finally:
                 pill.user_hidden = True
@@ -3722,97 +3796,504 @@ _VK_SPECIAL = {"space": 0x20, "tab": 0x09, "return": 0x0D, "enter": 0x0D, "esc":
                "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27}
 
 
-def to_pynput(seq):
-    """'Ctrl+Alt+D' -> '<ctrl>+<alt>+d'. Returns None if it isn't a usable global shortcut."""
-    mods, key, is_f = [], None, False
-    for part in [x.strip() for x in seq.split("+") if x.strip()]:
-        low = part.lower()
-        if low in ("ctrl", "alt", "shift"):
-            mods.append(f"<{low}>")
-        elif low == "meta":
-            mods.append("<cmd>")
-        elif low.startswith("f") and low[1:].isdigit():
-            key, is_f = f"<{low}>", True
-        elif low in _SPECIAL_KEYS:
-            key = _SPECIAL_KEYS[low]
-        elif len(part) == 1:
-            key = low
-        else:
-            return None
-    if key is None or (not mods and not is_f):
+_SHORTCUT_MODIFIERS = {'alt': 1, 'ctrl': 2, 'control': 2, 'shift': 4,
+                       'meta': 8, 'win': 8, 'windows': 8, 'super': 8, 'cmd': 8}
+_SHORTCUT_KEY_ALIASES = {'return': 'enter', 'escape': 'esc', 'del': 'delete', 'ins': 'insert',
+                         'pgup': 'pageup', 'pgdown': 'pagedown', 'page_up': 'pageup', 'page_down': 'pagedown'}
+_SHORTCUT_KEYS = {'space': (0x20, 'Space'), 'tab': (0x09, 'Tab'), 'enter': (0x0D, 'Return'),
+                  'esc': (0x1B, 'Esc'), 'backspace': (0x08, 'Backspace'), 'delete': (0x2E, 'Del'),
+                  'insert': (0x2D, 'Ins'), 'home': (0x24, 'Home'), 'end': (0x23, 'End'),
+                  'pageup': (0x21, 'PgUp'), 'pagedown': (0x22, 'PgDown'), 'up': (0x26, 'Up'),
+                  'down': (0x28, 'Down'), 'left': (0x25, 'Left'), 'right': (0x27, 'Right')}
+
+
+def _shortcut_parts(seq):
+    if not isinstance(seq, str):
         return None
-    return "+".join(mods + [key])
+    mods, key = 0, None
+    for part in (value.strip() for value in seq.split('+') if value.strip()):
+        low = part.lower()
+        if low in _SHORTCUT_MODIFIERS:
+            mods |= _SHORTCUT_MODIFIERS[low]
+        elif key is not None:
+            return None
+        else:
+            low = _SHORTCUT_KEY_ALIASES.get(low, low)
+            if (low in _SHORTCUT_KEYS or len(part) == 1
+                    or (low.startswith('f') and low[1:].isdigit() and 1 <= int(low[1:]) <= 24)):
+                key = low
+            else:
+                return None
+    if key is None or (not mods and not (key.startswith('f') and key[1:].isdigit())):
+        return None
+    return mods, key
+
+
+def _canonical_hotkey(seq):
+    if seq == '':
+        return ''
+    parsed = _shortcut_parts(seq)
+    if parsed is None:
+        return None
+    mods, key = parsed
+    prefix = [label for flag, label in ((2, 'Ctrl'), (1, 'Alt'), (4, 'Shift'), (8, 'Meta')) if mods & flag]
+    name = _SHORTCUT_KEYS[key][1] if key in _SHORTCUT_KEYS else key.upper()
+    return '+'.join(prefix + [name])
+
+
+def _display_hotkey(seq):
+    return (_canonical_hotkey(seq) or '').replace('Meta+', 'Win+')
+
+
+def _same_hotkey(first, second):
+    return bool(first and second and _shortcut_parts(first) is not None
+                and _shortcut_parts(first) == _shortcut_parts(second))
+
+
+def _shortcut_problem(seq, *, windows=None):
+    if seq == '':
+        return ''
+    parsed = _shortcut_parts(seq)
+    if parsed is None:
+        return 'Use Ctrl, Alt, Shift or Win with one key, or an F-key.'
+    mods, key = parsed
+    if windows is None:
+        windows = os.name == 'nt'
+    if windows and ((mods == 8 and key == 'l') or (mods & 3 == 3 and key == 'delete')):
+        return 'This security-protected Windows shortcut cannot be reassigned. Choose another combination.'
+    return ''
+
+
+def to_pynput(seq):
+    parsed = _shortcut_parts(seq)
+    if parsed is None:
+        return None
+    mods, key = parsed
+    parts = [f'<{label}>' for flag, label in ((2, 'ctrl'), (1, 'alt'), (4, 'shift'), (8, 'cmd')) if mods & flag]
+    if key in _SHORTCUT_KEYS:
+        key = {'pageup': 'page_up', 'pagedown': 'page_down'}.get(key, key)
+        key = f'<{key}>'
+    elif key.startswith('f') and key[1:].isdigit():
+        key = f'<{key}>'
+    return '+'.join(parts + [key])
 
 
 def parse_win_hotkey(seq):
-    """'Ctrl+Alt+D' -> (modifier flags, virtual key) for the Win32 RegisterHotKey call."""
-    mods, vk = 0, None
-    for part in [x.strip() for x in seq.split("+") if x.strip()]:
-        low = part.lower()
-        if low == "alt":
-            mods |= 0x1
-        elif low == "ctrl":
-            mods |= 0x2
-        elif low == "shift":
-            mods |= 0x4
-        elif low == "meta":
-            mods |= 0x8
-        elif low.startswith("f") and low[1:].isdigit() and 1 <= int(low[1:]) <= 24:
-            vk = 0x6F + int(low[1:])
-        elif low in _VK_SPECIAL:
-            vk = _VK_SPECIAL[low]
-        elif len(part) == 1:
-            r = ctypes.windll.user32.VkKeyScanW(ord(part)) & 0xFF
-            if r == 0xFF:
-                return None
-            vk = r
-        else:
+    parsed = _shortcut_parts(seq)
+    if parsed is None:
+        return None
+    mods, key = parsed
+    if key in _SHORTCUT_KEYS:
+        vk = _SHORTCUT_KEYS[key][0]
+    elif key.startswith('f') and key[1:].isdigit():
+        vk = 0x6F + int(key[1:])
+    elif len(key) == 1 and key.upper() in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+        vk = ord(key.upper())
+    else:
+        try:
+            vk = ctypes.windll.user32.VkKeyScanW(ord(key)) & 0xFF
+        except (AttributeError, OSError, TypeError):
             return None
-    return None if vk is None else (mods, vk)
+        if vk == 0xFF:
+            return None
+    return mods, vk
 
 
-class Hotkeys(QObject):
-    """Windows: native RegisterHotKey (reliable). Other systems: pynput fallback."""
-    triggered = pyqtSignal()
+def _shortcut_from_vk(mods, vk):
+    key = next((name for name, (code, _) in _SHORTCUT_KEYS.items() if code == vk), None)
+    if key is None:
+        if 0x70 <= vk <= 0x87:
+            key = 'F' + str(vk - 0x6F)
+        elif 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+            key = chr(vk)
+        else:
+            try:
+                char = ctypes.windll.user32.MapVirtualKeyW(vk, 2) & 0xFFFF
+                key = chr(char) if 32 <= char < 0xD800 else None
+            except (AttributeError, OSError, ValueError):
+                return None
+    if key is None:
+        return None
+    prefix = [label for flag, label in ((2, 'Ctrl'), (1, 'Alt'), (4, 'Shift'), (8, 'Meta')) if mods & flag]
+    return _canonical_hotkey('+'.join(prefix + [key]))
+
+
+def _shortcut_editor_active():
+    application = QApplication.instance()
+    focus = application.focusWidget() if application is not None else None
+    while focus is not None:
+        if isinstance(focus, QKeySequenceEdit):
+            return True
+        focus = focus.parentWidget()
+    return False
+
+
+class _WinShortcutState:
+    """Track modifier/key-up state, never text or a keyboard-event history."""
+    MODIFIERS = {0x10: 4, 0xA0: 4, 0xA1: 4, 0x11: 2, 0xA2: 2, 0xA3: 2,
+                 0x12: 1, 0xA4: 1, 0xA5: 1, 0x5B: 8, 0x5C: 8}
+
+    def __init__(self):
+        self.held = set()
+        self.suppressed = set()
+
+    @property
+    def modifiers(self):
+        value = 0
+        for key in self.held:
+            value |= self.MODIFIERS.get(key, 0)
+        return value
+
+    def feed(self, vk, down, lookup, *, capture=False):
+        if vk in self.MODIFIERS:
+            if down:
+                self.held.add(vk)
+            else:
+                self.held.discard(vk)
+            return False, None
+        if vk in self.suppressed:
+            if not down:
+                self.suppressed.discard(vk)
+            return True, None  # consume repeats AND the matching key-up
+        if not down or (not self.modifiers & 8 and not capture):
+            return False, None
+        action = lookup(self.modifiers, vk)
+        if action is None:
+            return False, None
+        self.suppressed.add(vk)
+        return True, action
+
+
+class _WindowsShortcutHook(QObject):
+    """Exact-chord, runtime-only Win-key ownership on a dedicated message thread.
+
+    Unmatched input is forwarded. No policies/registry keys are changed, and no
+    key text/history is recorded. Only configured chords or a focused shortcut
+    editor are intercepted. See Microsoft's LowLevelKeyboardProc documentation.
+    """
+    captured = pyqtSignal(object, int, int)
+    _instance = None
+    MASK_TAG = 0x44494354
 
     def __init__(self):
         super().__init__()
-        self._listener = None
+        self._lock = threading.RLock()
+        self._bindings = {}
+        self._capture_target = None
+        self._thread, self._tid, self._handle = None, None, None
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._native_ok = False
+        self.state = _WinShortcutState()
+        self.last_error = ''
+        self.intercepted_events = self.fired_events = self.mask_events = 0
+        self.captured.connect(self._deliver_capture)
+
+    @classmethod
+    def instance(cls):
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def bind(self, owner, mods, vk):
+        with self._lock:
+            self._bindings[id(owner)] = (weakref.ref(owner), mods, vk, owner._serial)
+        if self._ensure_thread():
+            return True
+        with self._lock:
+            self._bindings.pop(id(owner), None)
+        return False
+
+    def unbind(self, owner):
+        with self._lock:
+            self._bindings.pop(id(owner), None)
+        self._stop_if_idle()
+
+    def set_capture(self, editor):
+        with self._lock:
+            self._capture_target = weakref.ref(editor)
+        if self._ensure_thread():
+            return True
+        with self._lock:
+            self._capture_target = None
+        return False
+
+    def end_capture(self, editor):
+        with self._lock:
+            if self._capture_target is not None and self._capture_target() is editor:
+                self._capture_target = None
+        self._stop_if_idle()
+
+    @pyqtSlot(object, int, int)
+    def _deliver_capture(self, target, mods, vk):
+        with self._lock:
+            current = self._capture_target
+        if current is not target or target() is None:
+            return
+        try:
+            target().receive_windows_shortcut(mods, vk)
+        except RuntimeError:
+            pass  # the settings window was closed before queued delivery
+
+    def _lookup(self, mods, vk):
+        with self._lock:
+            target = self._capture_target
+            if target is not None and target() is not None:
+                text = _shortcut_from_vk(mods, vk)
+                if text is not None and not _shortcut_problem(text, windows=True):
+                    return 'capture', target, mods, vk
+                return None  # never try to block security-protected combinations
+            for ref, wanted_mods, wanted_vk, serial in self._bindings.values():
+                owner = ref()
+                if owner is not None and mods == wanted_mods and vk == wanted_vk:
+                    return 'binding', owner, serial
+        return None
+
+    def _ensure_thread(self):
+        if self._thread is not None and self._thread.is_alive():
+            if not self._stop.is_set():
+                return self._native_ok
+            self._thread.join(1)
+            if self._thread.is_alive():
+                self.last_error = 'The previous Windows shortcut handler is still stopping.'
+                return False
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self.state = _WinShortcutState()
+        self._native_ok = False
+        self.last_error = ''
+        self._thread = threading.Thread(target=self._native_loop, daemon=True, name='Dictate Windows shortcuts')
+        self._thread.start()
+        if not self._ready.wait(2):
+            self.last_error = 'Windows shortcut handler did not become ready.'
+            self._stop.set()
+            return False
+        return self._native_ok
+
+    def _is_idle(self):
+        with self._lock:
+            capture = self._capture_target
+            self._bindings = {key: value for key, value in self._bindings.items() if value[0]() is not None}
+            return not self._bindings and (capture is None or capture() is None) and not self.state.suppressed
+
+    def _stop_if_idle(self):
+        if self._is_idle():
+            self._request_stop()
+
+    def _request_stop(self):
+        self._stop.set()
+        try:
+            if self._tid:
+                ctypes.windll.user32.PostThreadMessageW(self._tid, 0x0012, 0, 0)
+        except (AttributeError, OSError):
+            pass
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(1)
+
+    def shutdown(self):
+        with self._lock:
+            self._bindings.clear()
+            self._capture_target = None
+        self._request_stop()
+
+    def _native_loop(self):
+        hook = timer = None
+        try:
+            from ctypes import wintypes
+            u = ctypes.WinDLL('user32', use_last_error=True)
+            k = ctypes.WinDLL('kernel32', use_last_error=True)
+            class Keyboard(ctypes.Structure):
+                _fields_ = [('vkCode', wintypes.DWORD), ('scanCode', wintypes.DWORD),
+                            ('flags', wintypes.DWORD), ('time', wintypes.DWORD), ('dwExtraInfo', ctypes.c_size_t)]
+            procedure = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t)
+            u.SetWindowsHookExW.argtypes = [ctypes.c_int, procedure, ctypes.c_void_p, wintypes.DWORD]
+            u.SetWindowsHookExW.restype = ctypes.c_void_p
+            u.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t]
+            u.CallNextHookEx.restype = ctypes.c_ssize_t
+            u.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+            k.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+            k.GetModuleHandleW.restype = ctypes.c_void_p
+            u.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+            u.SetTimer.argtypes = [ctypes.c_void_p, ctypes.c_size_t, wintypes.UINT, ctypes.c_void_p]
+            u.SetTimer.restype = ctypes.c_size_t
+            u.GetAsyncKeyState.argtypes = [ctypes.c_int]
+            u.GetAsyncKeyState.restype = ctypes.c_short
+            u.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), ctypes.c_void_p, wintypes.UINT, wintypes.UINT]
+            u.GetMessageW.restype = ctypes.c_int
+            k.GetCurrentThreadId.restype = wintypes.DWORD
+            u.KillTimer.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+            message = wintypes.MSG()
+            self._tid = k.GetCurrentThreadId()
+            u.PeekMessageW(ctypes.byref(message), None, 0, 0, 0)
+            self.state.held = {key for key in self.state.MODIFIERS if key not in (0x10, 0x11, 0x12) and u.GetAsyncKeyState(key) & 0x8000}
+
+            @procedure
+            def callback(code, wparam, lparam):
+                try:
+                    if code >= 0 and wparam in (0x0100, 0x0101, 0x0104, 0x0105):
+                        info = ctypes.cast(lparam, ctypes.POINTER(Keyboard)).contents
+                        if info.dwExtraInfo != self.MASK_TAG:
+                            target = self._capture_target
+                            capture = target is not None and target() is not None
+                            handled, action = self.state.feed(info.vkCode, wparam in (0x0100, 0x0104), self._lookup,
+                                                              capture=capture)
+                            if handled:
+                                self.intercepted_events += 1
+                                if action is not None:
+                                    # A harmless unassigned VK marks Win as used, so its
+                                    # eventual release cannot also open the Start menu.
+                                    if self.state.modifiers & 8:
+                                        u.keybd_event(0xE8, 0, 0, self.MASK_TAG)
+                                        u.keybd_event(0xE8, 0, 2, self.MASK_TAG)
+                                        self.mask_events += 1
+                                    self.fired_events += 1
+                                    if action[0] == 'capture':
+                                        self.captured.emit(action[1], action[2], action[3])
+                                    else:
+                                        action[1]._activated.emit(action[2])
+                                self._stop_if_idle()
+                                return 1
+                except Exception:
+                    pass  # fail open rather than trap unrelated input
+                return u.CallNextHookEx(hook, code, wparam, lparam)
+
+            hook = u.SetWindowsHookExW(13, callback, k.GetModuleHandleW(None), 0)
+            if not hook:
+                raise OSError(ctypes.get_last_error(), 'SetWindowsHookExW failed')
+            self._handle, self._native_ok = hook, True
+            timer = u.SetTimer(None, 0, 500, None)
+            self._ready.set()
+            while not self._stop.is_set() and u.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+                if message.message == 0x0113:
+                    # Resync outside the callback, after async state has updated;
+                    # this also recovers releases missed across a desktop switch.
+                    self.state.held = {key for key in self.state.MODIFIERS if key not in (0x10, 0x11, 0x12) and u.GetAsyncKeyState(key) & 0x8000}
+                    self.state.suppressed = {key for key in self.state.suppressed if u.GetAsyncKeyState(key) & 0x8000}
+                    self._stop_if_idle()
+                else:
+                    u.TranslateMessage(ctypes.byref(message))
+                    u.DispatchMessageW(ctypes.byref(message))
+        except Exception as exc:
+            self.last_error = 'Exclusive Windows shortcut handler could not start: ' + str(exc)
+        finally:
+            if timer:
+                u.KillTimer(None, timer)
+            if hook:
+                u.UnhookWindowsHookEx(hook)
+            self._handle, self._tid, self._native_ok = None, None, False
+            self._ready.set()
+
+
+class ShortcutEdit(QKeySequenceEdit):
+    """Capture Win+H/Win+V without launching the corresponding Windows feature."""
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        if os.name == 'nt':
+            _WindowsShortcutHook.instance().set_capture(self)
+
+    def focusOutEvent(self, event):
+        if os.name == 'nt' and _WindowsShortcutHook._instance is not None:
+            _WindowsShortcutHook._instance.end_capture(self)
+        super().focusOutEvent(event)
+
+    def hideEvent(self, event):
+        if os.name == 'nt' and _WindowsShortcutHook._instance is not None:
+            _WindowsShortcutHook._instance.end_capture(self)
+        super().hideEvent(event)
+
+    def receive_windows_shortcut(self, mods, vk):
+        text = _shortcut_from_vk(mods, vk)
+        if text:
+            self.setKeySequence(QKeySequence(text))
+            self.editingFinished.emit()
+
+
+class Hotkeys(QObject):
+    """Register ordinary chords; exclusively intercept assigned Win chords."""
+    triggered = pyqtSignal()
+    _activated = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+        self._listener = self._thread = None
         self._tid = None
+        self._uses_win_hook = False
+        self._stop_event = threading.Event()
+        self._serial = 0
+        self.sequence = ''
+        self.last_error = ''
+        self._activated.connect(self._deliver)
+
+    @pyqtSlot(int)
+    def _deliver(self, serial):
+        if self.sequence and serial == self._serial:
+            self.triggered.emit()  # no queued action may survive unassignment
 
     def set(self, seq):
-        self.stop()
-        if not seq:
+        if not self.stop():
+            self.last_error = 'The previous shortcut handler is still stopping. Please retry.'
             return False
-        return self._set_win(seq) if os.name == "nt" else self._set_pynput(seq)
+        self.last_error = ''
+        canonical = _canonical_hotkey(seq)
+        problem = _shortcut_problem(seq)
+        if not seq or canonical is None or problem:
+            self.last_error = problem or ('Invalid shortcut.' if seq else '')
+            return False
+        if os.name == 'nt':
+            parsed = parse_win_hotkey(canonical)
+            if parsed is not None and parsed[0] & 8:
+                router = _WindowsShortcutHook.instance()
+                ok = router.bind(self, *parsed)
+                self._uses_win_hook = bool(ok)
+                self.last_error = router.last_error
+            else:
+                ok = self._set_win(canonical)
+        else:
+            ok = self._set_pynput(canonical)
+        if ok:
+            self.sequence = canonical
+        return bool(ok)
 
     def _set_win(self, seq):
         parsed = parse_win_hotkey(seq)
         if not parsed:
+            self.last_error = 'Windows could not map this shortcut to a key.'
             return False
         mods, vk = parsed
         from ctypes import wintypes
-        ready, result = threading.Event(), {"ok": False, "tid": 0}
+        ready, result = threading.Event(), {'ok': False}
+        stopped, serial = threading.Event(), self._serial
+        self._stop_event = stopped
 
         def run():
-            u, k = ctypes.windll.user32, ctypes.windll.kernel32
-            msg = wintypes.MSG()
-            u.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)       # create this thread's queue
-            result["tid"] = k.GetCurrentThreadId()
-            result["ok"] = bool(u.RegisterHotKey(None, 1, mods | 0x4000, vk))   # | NOREPEAT
-            ready.set()
-            if not result["ok"]:
-                return
-            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-                if msg.message == 0x0312:                           # WM_HOTKEY
-                    self.triggered.emit()
-            u.UnregisterHotKey(None, 1)
-
-        threading.Thread(target=run, daemon=True).start()
-        ready.wait(2.0)
-        if result["ok"]:
-            self._tid = result["tid"]
-        return result["ok"]
+            registered = False
+            try:
+                u, k = ctypes.windll.user32, ctypes.windll.kernel32
+                msg = wintypes.MSG()
+                u.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+                self._tid = k.GetCurrentThreadId()
+                if stopped.is_set():
+                    return
+                registered = result['ok'] = bool(u.RegisterHotKey(None, 1, mods | 0x4000, vk))
+                ready.set()
+                while registered and not stopped.is_set() and u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                    if msg.message == 0x0312:
+                        self._activated.emit(serial)
+            except (AttributeError, OSError) as exc:
+                self.last_error = 'Windows shortcut registration failed: ' + str(exc)
+            finally:
+                if registered:
+                    u.UnregisterHotKey(None, 1)
+                ready.set()
+        self._thread = threading.Thread(target=run, daemon=True, name='Dictate global shortcut')
+        self._thread.start()
+        if not ready.wait(2):
+            self.last_error = 'Windows shortcut registration timed out.'
+            self.stop()
+            return False
+        if not result['ok']:
+            self.last_error = self.last_error or 'This shortcut is already registered or reserved.'
+        return result['ok']
 
     def _set_pynput(self, seq):
         combo = to_pynput(seq)
@@ -3820,26 +4301,246 @@ class Hotkeys(QObject):
             return False
         try:
             from pynput import keyboard
-            self._listener = keyboard.GlobalHotKeys({combo: self.triggered.emit})
+            serial = self._serial
+            self._listener = keyboard.GlobalHotKeys({combo: lambda: self._activated.emit(serial)})
             self._listener.daemon = True
             self._listener.start()
             return True
-        except Exception:
+        except Exception as exc:
+            self.last_error = 'Global shortcut registration failed: ' + str(exc)
             return False
 
     def stop(self):
+        self._serial += 1
+        self.sequence = ''
+        self._stop_event.set()
+        if self._uses_win_hook and _WindowsShortcutHook._instance is not None:
+            _WindowsShortcutHook._instance.unbind(self)
+        self._uses_win_hook = False
         try:
             if self._tid:
-                ctypes.windll.user32.PostThreadMessageW(self._tid, 0x0012, 0, 0)   # WM_QUIT
-        except Exception:
+                ctypes.windll.user32.PostThreadMessageW(self._tid, 0x0012, 0, 0)
+        except (AttributeError, OSError):
             pass
-        self._tid = None
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(1)
+        stopped = self._thread is None or not self._thread.is_alive()
+        if stopped:
+            self._tid = self._thread = None
         try:
             if self._listener is not None:
                 self._listener.stop()
+                if self._listener is not threading.current_thread():
+                    self._listener.join(1)
+                if self._listener.is_alive():
+                    stopped = False
+                else:
+                    self._listener = None
+        except (RuntimeError, AttributeError):
+            self._listener = None
+        return stopped
+
+
+def _check_windows_shortcuts(application):
+    """Real Win32 hooks/SendInput, with an independent downstream safety observer.
+
+    Only tagged synthetic test keys are counted. The observer eats any test
+    Win+H/Win+V that reaches it, so a broken interception test cannot launch a
+    native panel. This is not a physical keyboard/secure-desktop guarantee.
+    """
+    if os.name != 'nt':
+        return {'status': 'not_applicable', 'reason': 'Requires a Windows desktop',
+                'synthetic_keyboard_input': False}
+    from ctypes import wintypes
+    u = ctypes.WinDLL('user32', use_last_error=True)
+    k = ctypes.WinDLL('kernel32', use_last_error=True)
+    tag = 0x44495453
+    class KeyboardEvent(ctypes.Structure):
+        _fields_ = [('vkCode', wintypes.DWORD), ('scanCode', wintypes.DWORD),
+                    ('flags', wintypes.DWORD), ('time', wintypes.DWORD), ('dwExtraInfo', ctypes.c_size_t)]
+    class KeyboardInput(ctypes.Structure):
+        _fields_ = [('wVk', wintypes.WORD), ('wScan', wintypes.WORD), ('dwFlags', wintypes.DWORD),
+                    ('time', wintypes.DWORD), ('dwExtraInfo', ctypes.c_size_t)]
+    class MouseInput(ctypes.Structure):
+        _fields_ = [('dx', wintypes.LONG), ('dy', wintypes.LONG), ('mouseData', wintypes.DWORD),
+                    ('dwFlags', wintypes.DWORD), ('time', wintypes.DWORD), ('dwExtraInfo', ctypes.c_size_t)]
+    class InputUnion(ctypes.Union):
+        _fields_ = [('ki', KeyboardInput), ('mi', MouseInput)]
+    class Input(ctypes.Structure):
+        _anonymous_ = ('value',)
+        _fields_ = [('type', wintypes.DWORD), ('value', InputUnion)]
+    proc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t)
+    u.SetWindowsHookExW.argtypes = [ctypes.c_int, proc, ctypes.c_void_p, wintypes.DWORD]
+    u.SetWindowsHookExW.restype = ctypes.c_void_p
+    u.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.CallNextHookEx.restype = ctypes.c_ssize_t
+    u.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+    u.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
+    u.SendInput.restype = wintypes.UINT
+    k.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    k.GetModuleHandleW.restype = ctypes.c_void_p
+    k.GetCurrentThreadId.restype = wintypes.DWORD
+    ready, observation = threading.Event(), {'tid': 0, 'error': '', 'markers': 0, 'win': set(), 'keys': collections.Counter()}
+    primaries = (0x48, 0x56, 0x86)  # H, V, F23; no arbitrary input is recorded
+
+    def observe():
+        handle = None
+        try:
+            msg = wintypes.MSG()
+            observation['tid'] = k.GetCurrentThreadId()
+            u.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+            @proc
+            def callback(code, wparam, lparam):
+                if code >= 0 and wparam in (0x0100, 0x0101, 0x0104, 0x0105):
+                    data = ctypes.cast(lparam, ctypes.POINTER(KeyboardEvent)).contents
+                    if data.dwExtraInfo == tag:
+                        down = wparam in (0x0100, 0x0104)
+                        if data.vkCode in (0x5B, 0x5C):
+                            if down:
+                                observation['win'].add(data.vkCode)
+                            else:
+                                observation['win'].discard(data.vkCode)
+                        elif data.vkCode == 0xE8 and not down:
+                            observation['markers'] += 1
+                        elif data.vkCode in primaries:
+                            observation['keys'][data.vkCode] += 1
+                            if observation['win']:
+                                return 1  # independent safety net AFTER Dictate's hook
+                return u.CallNextHookEx(handle, code, wparam, lparam)
+            handle = u.SetWindowsHookExW(13, callback, k.GetModuleHandleW(None), 0)
+            if not handle:
+                raise OSError(ctypes.get_last_error(), 'Safety observer hook failed')
+            ready.set()
+            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                u.TranslateMessage(ctypes.byref(msg))
+                u.DispatchMessageW(ctypes.byref(msg))
+        except Exception as exc:
+            observation['error'] = str(exc)
+        finally:
+            if handle:
+                u.UnhookWindowsHookEx(handle)
+            ready.set()
+
+    def wait_for(condition):
+        deadline = time.monotonic() + 3
+        while not condition() and time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(.002)
+        application.processEvents()
+        assert condition(), 'Timed out waiting for tagged Windows keyboard input'
+
+    def inject(events):
+        values = (Input * len(events))()
+        for item, (vk, down) in zip(values, events):
+            item.type = 1
+            item.ki = KeyboardInput(vk, 0, 0 if down else 2, 0, tag)
+        assert u.SendInput(len(values), values, ctypes.sizeof(Input)) == len(values), 'Windows refused synthetic test input'
+
+    def chord(mods, vk, repeats=1):
+        before = observation['markers']
+        modifiers = [key for flag, key in ((2, 0xA2), (1, 0xA4), (4, 0xA0), (8, 0x5B)) if mods & flag]
+        # Always mark Win as used even when the safety observer eats a key.
+        inject([(key, True) for key in modifiers] + [(vk, True)] * repeats + [(vk, False),
+               (0xE8, True), (0xE8, False)] + [(key, False) for key in reversed(modifiers)])
+        wait_for(lambda: observation['markers'] > before)
+        # Flush queued Qt activations and release notifications before rebinding.
+        deadline = time.monotonic() + .04
+        while time.monotonic() < deadline:
+            application.processEvents()
+            time.sleep(.002)
+
+    previous = _WindowsShortcutHook._instance
+    assert previous is None or previous._is_idle(), 'Smoke test requires an isolated process'
+    router = _WindowsShortcutHook()
+    _WindowsShortcutHook._instance = router
+    observer = threading.Thread(target=observe, daemon=True, name='Dictate shortcut test safety observer')
+    handles = [Hotkeys() for _ in range(5)]
+    first, second, ordinary, default_show, default_dictation = handles
+    editor = ShortcutEdit()
+    calls, checks = collections.Counter(), []
+    first.triggered.connect(functools.partial(calls.update, ['first']))
+    second.triggered.connect(functools.partial(calls.update, ['second']))
+    ordinary.triggered.connect(functools.partial(calls.update, ['ordinary']))
+    default_dictation.triggered.connect(functools.partial(calls.update, ['default_dictation']))
+    try:
+        observer.start()
+        assert ready.wait(3) and not observation['error'], observation['error']
+        assert DEFAULTS['hotkey'] == 'Ctrl+Alt+D' and DEFAULTS['dict_hotkey'] == 'Ctrl+Alt+Space'
+        assert default_show.set(DEFAULTS['hotkey']), default_show.last_error
+        assert default_dictation.set(DEFAULTS['dict_hotkey']), default_dictation.last_error
+        checks.append('both_original_defaults_register_unchanged')
+        assert not ordinary.set('Win+L') and not ordinary.set('Ctrl+Alt+Delete')
+        checks.append('protected_shortcuts_rejected_without_injecting_them')
+        assert first.set('Windows+H'), first.last_error
+        assert second.set('Win+V'), second.last_error
+        chord(8, 0x48, 4)
+        chord(8, 0x56, 3)
+        assert calls['first'] == calls['second'] == 1, dict(calls)
+        assert observation['keys'][0x48] == observation['keys'][0x56] == 0, dict(observation['keys'])
+        assert router.mask_events >= 2 and not router.state.suppressed
+        checks.append('win_h_and_win_v_down_repeat_and_up_blocked_before_downstream_observer')
+        checks.append('one_activation_per_press_and_start_menu_mask_sent')
+        chord(8 | 4, 0x48)
+        assert calls['first'] == 1 and observation['keys'][0x48] == 2
+        checks.append('unmatched_extra_modifier_is_forwarded')
+        assert first.stop()
+        chord(8, 0x48)
+        assert calls['first'] == 1 and observation['keys'][0x48] == 4
+        checks.append('unassignment_restores_downstream_delivery')
+        editor.setWindowTitle('Dictate shortcut capture verification')
+        editor.show()
+        editor.activateWindow()
+        editor.setFocus()
+        wait_for(lambda: router._capture_target is not None and router._capture_target() is editor)
+        chord(8, 0x56)
+        assert editor.keySequence() == QKeySequence('Meta+V')
+        assert calls['second'] == 1 and observation['keys'][0x56] == 0
+        checks.append('focused_shortcut_editor_captures_win_v_without_firing_binding_or_native_feature')
+        chord(2 | 1, 0x20)
+        assert editor.keySequence() == QKeySequence(DEFAULTS['dict_hotkey']) and not calls['default_dictation']
+        checks.append('focused_editor_can_capture_an_existing_non_win_assignment_without_triggering_it')
+        editor.clearFocus()
+        editor.hide()
+        wait_for(lambda: router._capture_target is None)
+        assert first.set('Win+Alt+F23'), first.last_error
+        chord(8 | 1, 0x86)
+        assert calls['first'] == 2 and observation['keys'][0x86] == 0
+        checks.append('additional_win_modifier_chord_is_exclusive')
+        assert ordinary.set('Ctrl+Alt+F23'), ordinary.last_error
+        chord(2 | 1, 0x86, 3)
+        assert calls['ordinary'] == 1
+        assert ordinary.stop() and (ordinary._thread is None or not ordinary._thread.is_alive())
+        assert u.RegisterHotKey(None, 0xD126, 2 | 1 | 0x4000, 0x86)
+        u.UnregisterHotKey(None, 0xD126)
+        checks.append('ordinary_hotkey_no_repeat_and_joined_unregister_verified')
+        for handle in handles:
+            assert handle.stop()
+        router.shutdown()
+        assert router._thread is not None and not router._thread.is_alive()
+        before = observation['keys'][0x56]
+        chord(8, 0x56)
+        assert calls['second'] == 1 and observation['keys'][0x56] == before + 2
+        checks.append('hook_thread_exits_and_native_key_delivery_returns_after_teardown')
+        return {'status': 'ok', 'checks': checks, 'synthetic_keyboard_input': True,
+                'win_h_v_downstream_suppression': True, 'permanent_system_changes': False,
+                'protected_shortcuts_injected': False, 'physical_keyboard_test': False,
+                'intercepted_events': router.intercepted_events, 'mask_events': router.mask_events}
+    finally:
+        # Release only this isolated test's synthetic keys, including a Win-use
+        # mask before releasing Win, even after a failed assertion.
+        try:
+            inject([(0xE8, True), (0xE8, False)] + [(key, False) for key in (*primaries, 0xA0, 0xA2, 0xA4, 0x5B)])
         except Exception:
             pass
-        self._listener = None
+        for handle in handles:
+            handle.stop()
+        router.shutdown()
+        editor.deleteLater()
+        _WindowsShortcutHook._instance = previous
+        if observation['tid']:
+            u.PostThreadMessageW(observation['tid'], 0x0012, 0, 0)
+        if observer.is_alive():
+            observer.join(2)
 
 
 # ------------------------------------------------------------------ settings UI
@@ -4522,6 +5223,7 @@ class SettingsDialog(QDialog):
         _normalise_ui_settings(settings)
         self.settings, self.engine = settings, engine
         self.engine.unload_after_paste = settings["unload_min"] == -1
+        self.shortcut_handler = None
         self.setWindowTitle(f"{APP_NAME} - Settings")
         self.resize(1000, 720)
 
@@ -4597,9 +5299,9 @@ class SettingsDialog(QDialog):
 
         card, cl = _card()
         cl.addLayout(_text_block("Show / hide shortcut",
-                                 "Click the box, then press your keys. Works from any app."))
+                                 "Click, then press Ctrl/Alt/Shift/Win plus a key. Defaults are unchanged."))
         row = QHBoxLayout()
-        self.keys = QKeySequenceEdit(QKeySequence(settings["hotkey"]))
+        self.keys = ShortcutEdit(QKeySequence(_canonical_hotkey(settings["hotkey"]) or ""))
         try:
             self.keys.setMaximumSequenceLength(1)
         except Exception:
@@ -4618,9 +5320,9 @@ class SettingsDialog(QDialog):
         cl.addWidget(self.key_note)
         cl.addLayout(_text_block("Dictation shortcut",
                                  "Press to start; press again to stop and paste the whole session. "
-                                 "The show / hide shortcut never starts recording."))
+                                 "The show / hide shortcut never starts recording. Supported Win chords override their native action only while Dictate runs; security shortcuts stay protected."))
         row = QHBoxLayout()
-        self.keys2 = QKeySequenceEdit(QKeySequence(settings.get("dict_hotkey", DEFAULTS["dict_hotkey"])))
+        self.keys2 = ShortcutEdit(QKeySequence(_canonical_hotkey(settings.get("dict_hotkey", DEFAULTS["dict_hotkey"])) or ""))
         try:
             self.keys2.setMaximumSequenceLength(1)
         except Exception:
@@ -4697,7 +5399,7 @@ class SettingsDialog(QDialog):
         self.speed.setCurrentIndex(max(0, self.speed.findData(settings.get("pause_blocks", 8))))
         self.speed.currentIndexChanged.connect(self._speed)
         cl.addWidget(self.speed)
-        cl.addLayout(_text_block("Stop mode", "Applies to the pop-up mic control. The dictation shortcut always uses explicit start / stop."))
+        cl.addLayout(_text_block("Stop mode", "Legacy automatic listening only. The pop-up mic and dictation shortcut always use explicit start / finish."))
         self.stopmode = QComboBox()
         self.stopmode.addItem("Auto  -  stops when you pause", "auto")
         self.stopmode.addItem("Manual  -  press shortcut again to stop", "manual")
@@ -4800,7 +5502,7 @@ class SettingsDialog(QDialog):
         c3.addWidget(card)
 
         card, cl = _card()
-        cl.addLayout(_text_block("Pop-up size", "Tiny to large; the same capsule and controls."))
+        cl.addLayout(_text_block("Pop-up size", "Tiny to large. Hover over recording bars for controls."))
         self.size = QComboBox()
         for label, key in (("Tiny", "tiny"), ("Extra small", "extra_small"),
                            ("Small", "small"), ("Medium", "medium"), ("Large", "large")):
@@ -5019,26 +5721,10 @@ class SettingsDialog(QDialog):
         self.keys.blockSignals(False)
 
     def _apply_hotkey(self, text):
-        self._set_keys(text)
-        self.settings["hotkey"] = text
-        save_settings(self.settings)
-        self.key_note.hide()
-        self.hotkey_changed.emit(text)
+        return self._assign_shortcut('hotkey', text)
 
     def _keys(self, seq):
-        text = seq.toString(QKeySequence.SequenceFormat.PortableText).split(",")[0].strip()
-        if not text:
-            return
-        if to_pynput(text) is None:
-            self.key_note.setText("Use a modifier (Ctrl, Alt, Shift) with a key, or an F-key.")
-            self.key_note.show()
-            self._set_keys(self.settings["hotkey"])
-            return
-        if text == self.settings.get("dict_hotkey"):
-            self.key_note.setText("That shortcut is already used for dictation.")
-            self.key_note.show()
-            self._set_keys(self.settings["hotkey"])
-            return
+        text = seq.toString(QKeySequence.SequenceFormat.PortableText).split(',')[0].strip()
         self._apply_hotkey(text)
 
     def _set_keys2(self, text):
@@ -5047,27 +5733,41 @@ class SettingsDialog(QDialog):
         self.keys2.blockSignals(False)
 
     def _apply_hotkey2(self, text):
-        self._set_keys2(text)
-        self.settings["dict_hotkey"] = text
-        save_settings(self.settings)
-        self.key_note.hide()
-        self.dict_hotkey_changed.emit(text)
+        return self._assign_shortcut('dict_hotkey', text)
 
     def _keys2(self, seq):
-        text = seq.toString(QKeySequence.SequenceFormat.PortableText).split(",")[0].strip()
-        if not text:
-            return
-        if to_pynput(text) is None:
-            self.key_note.setText("Use a modifier (Ctrl, Alt, Shift) with a key, or an F-key.")
-            self.key_note.show()
-            self._set_keys2(self.settings.get("dict_hotkey", DEFAULTS["dict_hotkey"]))
-            return
-        if text == self.settings["hotkey"]:
-            self.key_note.setText("That shortcut is already used to show / hide the pop-up.")
-            self.key_note.show()
-            self._set_keys2(self.settings.get("dict_hotkey", DEFAULTS["dict_hotkey"]))
-            return
+        text = seq.toString(QKeySequence.SequenceFormat.PortableText).split(',')[0].strip()
         self._apply_hotkey2(text)
+
+    def refresh_shortcuts(self):
+        self._set_keys(_canonical_hotkey(self.settings.get('hotkey', '')) or '')
+        self._set_keys2(_canonical_hotkey(self.settings.get('dict_hotkey', '')) or '')
+
+    def _assign_shortcut(self, key, text):
+        canonical = _canonical_hotkey(text)
+        problem = _shortcut_problem(text)
+        if canonical is None or problem:
+            self.key_note.setText(problem or 'Invalid shortcut.')
+            self.key_note.show()
+            self.refresh_shortcuts()
+            return False
+        if self.shortcut_handler is not None:
+            ok = self.shortcut_handler(key, canonical)
+            self.refresh_shortcuts()
+            return ok
+        other = 'dict_hotkey' if key == 'hotkey' else 'hotkey'
+        duplicate = _same_hotkey(canonical, self.settings.get(other, ''))
+        if duplicate:
+            self.settings[other] = ''
+        self.settings[key] = canonical
+        save_settings(self.settings)
+        self.refresh_shortcuts()
+        self.key_note.setText('Previous duplicate assignment removed.' if duplicate else '')
+        self.key_note.setVisible(duplicate)
+        if duplicate:
+            (self.dict_hotkey_changed if other == 'dict_hotkey' else self.hotkey_changed).emit('')
+        (self.dict_hotkey_changed if key == 'dict_hotkey' else self.hotkey_changed).emit(canonical)
+        return True
 
     def _stop_mode(self, i):
         key = self.stopmode.itemData(i) or "auto"
@@ -5348,6 +6048,7 @@ class App:
         self.dialog = None
         self.update_dialog = None
         self._dictation_after_load = False
+        self._popup_cancel_serial, self._popup_cancel_ticket = 0, None
         self._quitting = False
         self._update_prompt_open = False
         self.updater = ReleaseUpdater()
@@ -5368,7 +6069,10 @@ class App:
         self.engine.model_ready.connect(self.on_ready)
         self.engine.model_error.connect(self.on_error)
         self.engine.unloaded.connect(self.on_unloaded)
-        self.pill.reload_requested.connect(self.reload_model)
+        self.pill.record_requested.connect(self.start_popup_recording)
+        self.pill.cancel_requested.connect(self.cancel_popup_recording)
+        self.pill.pause_requested.connect(self.pause_popup_recording)
+        self.pill.commit_requested.connect(self.commit_popup_recording)
         self.engine.message.connect(lambda m: self.say(m, 4000))
 
         self.tray = QSystemTrayIcon(self.qt.windowIcon())
@@ -5389,11 +6093,11 @@ class App:
         self.tray.activated.connect(
             lambda r: self.toggle_popup() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
         self.tray.show()
-        self.hotkeys = Hotkeys()
-        self.hotkeys.triggered.connect(self.toggle_popup)
-        self.set_hotkey(self.settings["hotkey"])
-        self.engine.manual = self.settings.get("stop_mode", "auto") == "manual"
-        self.dict_hotkeys = Hotkeys()
+        self.hotkeys, self.dict_hotkeys = Hotkeys(), Hotkeys()
+        self._active_shortcuts = {'hotkey': '', 'dict_hotkey': ''}
+        self.hotkeys.triggered.connect(lambda: self.toggle_popup(from_shortcut=True))
+        self.set_hotkey(self.settings['hotkey'])
+        self.engine.manual = self.settings.get('stop_mode', 'auto') == 'manual'
         self.dict_hotkeys.triggered.connect(self.on_dictation_key)
         self.set_dict_hotkey(self.settings.get("dict_hotkey", DEFAULTS["dict_hotkey"]))
 
@@ -5452,19 +6156,149 @@ class App:
         else:   # pop-up is closed: use a tray notification instead
             self.tray.showMessage(APP_NAME, text, QSystemTrayIcon.MessageIcon.NoIcon, ms)
 
-    def toggle_popup(self):
+    def toggle_popup(self, *, from_shortcut=False):
+        if from_shortcut and _shortcut_editor_active():
+            return
         if self.pill.isVisible() and not self.pill.user_hidden:
             self.pill.hide_popup()
         else:
+            self._invalidate_popup_cancel()
             self.pill.show_popup()
             self.reload_model(purpose='popup')
 
+    def _invalidate_popup_cancel(self):
+        self._popup_cancel_serial = getattr(self, '_popup_cancel_serial', 0) + 1
+        self._popup_cancel_ticket = None
+
+    def _sync_popup_preparing(self):
+        pill = getattr(self, 'pill', None)
+        if pill is not None and hasattr(pill, 'set_preparing'):
+            pill.set_preparing(self._dictation_after_load)
+
+    def _show_recording_popup(self):
+        pill = getattr(self, 'pill', None)
+        if pill is not None and (pill.user_hidden or not pill.isVisible()):
+            pill.show_popup()  # explicit recording intent, not passive preloading
+
+    @_preserve_input_focus
+    def start_popup_recording(self):
+        if getattr(self, '_quitting', False) or self.engine.recording:
+            return False
+        if self._dictation_after_load:
+            return True  # repeated mic clicks cannot cancel or queue another start
+        path = self.settings.get('model_path', '')
+        if self.engine.model is None and (not path or not Path(path).exists()):
+            self.say('Right-click the pop-up → Settings to select a speech model.', 4000)
+            return False
+        self.on_dictation_key(from_popup=True)
+        return self.engine.recording or self._dictation_after_load
+
+    @_preserve_input_focus
+    def pause_popup_recording(self):
+        if self.engine.recording:
+            self.engine.toggle_pause()
+            self.say('Paused — hover to resume, cancel or paste.' if self.engine.paused else 'Recording resumed.', 1800)
+
+    @_preserve_input_focus
+    def commit_popup_recording(self):
+        if getattr(self, '_quitting', False) or not self.engine.recording:
+            return False
+        self.on_dictation_key(from_popup=True)
+        return True
+
+    @_preserve_input_focus
+    def cancel_popup_recording(self):
+        if getattr(self, '_quitting', False):
+            return
+        self.pill.hide_popup(closing_mode='finishing')
+        self._dictation_after_load = False
+        self._sync_popup_preparing()
+        self._invalidate_popup_cancel()
+        self.engine.set_listening(False)  # cancel, never enqueue a commit/paste
+        ticket = (self._popup_cancel_serial, self.engine._model_generation)
+        self._popup_cancel_ticket = ticket
+        self._finish_popup_cancel(ticket)
+
+    def _finish_popup_cancel(self, ticket):
+        if (getattr(self, '_quitting', False) or getattr(self, '_popup_cancel_ticket', None) != ticket):
+            return
+        engine = self.engine
+        if (ticket[1] != engine._model_generation or engine.recording or self._dictation_after_load):
+            self._popup_cancel_ticket = None
+            return  # a replacement model/new recording must never be unloaded
+        if engine.loading or engine.busy or engine.pending or engine._unloading:
+            QTimer.singleShot(100, functools.partial(self._finish_popup_cancel, ticket))
+            return
+        if engine.model is None or engine.unload(reason='cancel', expected_generation=ticket[1]):
+            self._popup_cancel_ticket = None
+        else:
+            QTimer.singleShot(100, functools.partial(self._finish_popup_cancel, ticket))
+
+    def _shortcut_feedback(self, text):
+        if self.dialog is not None:
+            self.dialog.key_note.setText(text)
+            self.dialog.key_note.setVisible(bool(text))
+        elif text:
+            self.say(text, 4500)
+
+    def _refresh_shortcut_status(self):
+        active = getattr(self, '_active_shortcuts', {})
+        self._dictation_shortcut_registered = bool(active.get('dict_hotkey'))
+        self.engine.shortcut = active.get('dict_hotkey') or DEFAULTS['dict_hotkey']
+        tip = f'{APP_NAME} {VERSION}'
+        if active.get('hotkey'):
+            tip += f"  — {_display_hotkey(active['hotkey'])} shows/hides the pop-up"
+        self.tray.setToolTip(tip)
+        if self.dialog is not None:
+            self.dialog.refresh_shortcuts()
+
+    def assign_shortcut(self, key, seq, *, persist=True):
+        """Transactional ownership: clear a duplicate only if the new bind succeeds."""
+        if key not in ('hotkey', 'dict_hotkey'):
+            return False
+        canonical = _canonical_hotkey(seq)
+        problem = _shortcut_problem(seq)
+        if canonical is None or problem:
+            self._shortcut_feedback(problem or 'Invalid shortcut.')
+            return False
+        handles = {'hotkey': self.hotkeys, 'dict_hotkey': self.dict_hotkeys}
+        other = 'dict_hotkey' if key == 'hotkey' else 'hotkey'
+        active = getattr(self, '_active_shortcuts', {'hotkey': '', 'dict_hotkey': ''})
+        old = dict(active)
+        duplicate = _same_hotkey(canonical, old.get(other, ''))
+        if duplicate:
+            handles[other].stop()
+            active[other] = ''
+        ok = handles[key].set(canonical) if canonical else handles[key].stop() is not False
+        if not ok:
+            error = getattr(handles[key], 'last_error', '')
+            active[key] = old.get(key, '') if old.get(key) and handles[key].set(old[key]) else ''
+            if duplicate:
+                active[other] = old[other] if handles[other].set(old[other]) else ''
+            self._active_shortcuts = active
+            self._refresh_shortcut_status()
+            self._shortcut_feedback((error or 'Shortcut could not be assigned.') + ' Previous bindings were restored where available.')
+            return False
+        active[key] = canonical
+        self._active_shortcuts = active
+        if persist or duplicate:
+            self.settings[key] = canonical
+            if duplicate:
+                self.settings[other] = ''
+            save_settings(self.settings)
+        self._refresh_shortcut_status()
+        message = ''
+        if duplicate:
+            previous_role = 'dictation' if other == 'dict_hotkey' else 'Show / hide'
+            message = f'Removed the duplicate {previous_role} assignment. '
+        if canonical and _shortcut_parts(canonical)[0] & 8 and os.name == 'nt':
+            message += f'{_display_hotkey(canonical)} is exclusive to Dictate while running; the native Windows action returns after unassigning/exiting.'
+        if persist:
+            self._shortcut_feedback(message)
+        return True
+
     def set_dict_hotkey(self, seq):
-        ok = self.dict_hotkeys.set(seq) if seq else False
-        self._dictation_shortcut_registered = bool(ok)
-        self.engine.shortcut = seq or DEFAULTS["dict_hotkey"]
-        if seq and not ok:
-            self.say("Dictation shortcut could not be registered - pick a different one.", 4500)
+        return self.assign_shortcut('dict_hotkey', seq, persist=False)
 
     def on_stop_mode(self, key):
         self.engine.set_manual(key == "manual")
@@ -5472,51 +6306,60 @@ class App:
                  else "Auto: stops when you pause", 3000)
 
     @_preserve_input_focus
-    def on_dictation_key(self):
+    def on_dictation_key(self, *, from_popup=False):
+        if getattr(self, '_quitting', False) or (not from_popup and _shortcut_editor_active()):
+            return
         e = self.engine
+        self._invalidate_popup_cancel()
         if e.model is None or e.loading or e._unloading:
-            mp = self.settings["model_path"]
+            mp = self.settings['model_path']
             if mp and Path(mp).exists():
                 self._dictation_after_load = not self._dictation_after_load
+                self._sync_popup_preparing()
                 if self._dictation_after_load:
+                    self._show_recording_popup()
                     if not e.loading:
-                        self.reload_model(purpose="dictation")
+                        self.reload_model(purpose='dictation')
                     else:
-                        self.say("Loading model - recording will start when ready", 2500)
+                        self.say('Loading model — recording will start when ready.', 2500)
                 else:
-                    self.say("Recording start cancelled", 1800)
+                    self.say('Recording start cancelled.', 1800)
             else:
-                self.say("Load a model first")
+                self.say('Load a model first — right-click the pop-up for Settings.')
             return
-        # The dictation shortcut is always explicit start/commit, never mic-off.
-        # Pop-up visibility remains available in the existing tray menu.
-        r = e.toggle_record()
+        self._dictation_after_load = False
+        self._sync_popup_preparing()
+        r = e.toggle_record()  # same explicit start / one complete commit as the shortcut
         if r is True:
-            self.say("Recording - press the shortcut again to stop", 2500)
+            self._show_recording_popup()
+            self.say('Recording — hover for Cancel, Pause and Paste.', 2500)
         elif r is False:
-            self.say("Typing...", 1200)
+            self.say('Typing...', 1200)
+            pill = getattr(self, 'pill', None)
+            if pill is not None:
+                pill.hide_popup(closing_mode='finishing')
         else:
-            self.say("Microphone could not start - check the selected input", 3000)
+            self.say('Microphone could not start — check the selected input.', 3000)
 
     def set_hotkey(self, seq):
-        ok = self.hotkeys.set(seq) if seq else False
-        tip = f"{APP_NAME} {VERSION}" + (f"  -  {seq} shows/hides the pop-up" if ok else "")
-        self.tray.setToolTip(tip)
-        if seq and not ok:
-            self.say("Shortcut could not be registered - another app may use it. Pick a different one.", 4500)
+        return self.assign_shortcut('hotkey', seq, persist=False)
 
     def on_ready(self):
-        # Loading a model must not start automatic, pause-based submissions.
-        if self._dictation_after_load:
+        ticket = getattr(self, '_popup_cancel_ticket', None)
+        if ticket is not None:
+            self._finish_popup_cancel(ticket)
+        elif self._dictation_after_load:
             self._dictation_after_load = False
-            self.on_dictation_key()
-        else:
-            self.say("Model loaded - press the dictation shortcut to record.", 3500)
+            self._sync_popup_preparing()
+            self.on_dictation_key(from_popup=True)
+        elif self.engine.model is not None:
+            self.say('Model loaded — click the mic or press the dictation shortcut.', 3500)
         if self.dialog:
             self.dialog.refresh_status()
 
     def on_error(self, err):
         self._dictation_after_load = False
+        self._sync_popup_preparing()
         self.say("Model failed to load", 4000)
         if self.dialog:
             self.dialog.refresh_status(f"Load failed: {err}")
@@ -5644,6 +6487,10 @@ class App:
             self._update_prompt_open = False
 
     def on_unloaded(self):
+        if self.engine.unload_reason == 'cancel':
+            if self.dialog:
+                self.dialog.refresh_status()
+            return
         message = ('Text inserted; model unloaded to free memory.' if self.engine.unload_reason == 'paste'
                    else 'Model unloaded to free memory.')
         hint = ' Show the pop-up to preload, or use the dictation shortcut.'
@@ -5659,16 +6506,18 @@ class App:
         if purpose == 'dictation' and not self._dictation_after_load:
             return False
         e = self.engine
-        if e.model is not None or e.loading:
+        if e.loading:
             return False
         if e._unloading:
             # A previous successful paste may still be releasing its worker.
-            # Retrying on Qt's thread avoids racing that worker or blocking UI.
+            # Retry even before that worker has cleared its old model pointer.
             QTimer.singleShot(100, functools.partial(self.reload_model, purpose=purpose))
+            return False
+        if e.model is not None:
             return False
         path = self.settings["model_path"]
         if path and Path(path).exists() and e.load_model(path):
-            self.say('Loading model — recording only starts with the dictation shortcut.', 3000)
+            self.say('Loading model — recording starts only after your mic/shortcut request.', 3000)
             return True
         return False
 
@@ -5695,6 +6544,7 @@ class App:
     def open_settings(self):
         if self.dialog is None:
             self.dialog = SettingsDialog(self.settings, self.engine)
+            self.dialog.shortcut_handler = self.assign_shortcut
             self.dialog.theme_changed.connect(self._refresh_dialog_themes)
             self.dialog.model_chosen.connect(self.choose_model)
             self.dialog.position_chosen.connect(self.go_to_preset)
@@ -5730,6 +6580,8 @@ class App:
         self.engine.shutdown()
         self.hotkeys.stop()
         self.dict_hotkeys.stop()
+        if _WindowsShortcutHook._instance is not None:
+            _WindowsShortcutHook._instance.shutdown()
         self.tray.hide()
         self.qt.quit()
 
@@ -5820,6 +6672,8 @@ def _packaging_smoke_test(arguments):
         update_window.close()
         stage("rendering updater contrast in dark/light themes and hostile Windows-style palettes")
         report["updater_readability"] = _check_update_dialog_readability(application)
+        stage("verifying Windows-key interception, editor capture and shortcut teardown with synthetic input")
+        report['windows_shortcuts'] = _check_windows_shortcuts(application)
         # Import both runtime wrappers even if no model is supplied. Native
         # model runs below also catch missing/incompatible DLL dependencies.
         stage("loading native runtime wrappers")

@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QFrame, QScrollArea
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dictate as m
+from v126_scope import V126_AUTHORIZED
 from test_targeted_fix import Engine, feed, until, tiny_gguf
 from test_focus_symbols import pump
 from test_updates import release, downloads, PAYLOAD, application, dialog
@@ -34,7 +35,7 @@ def canonical(value):
     return value
 
 
-@pytest.mark.parametrize('name', PROTECTED)
+@pytest.mark.parametrize('name', [name for name in PROTECTED if name not in V126_AUTHORIZED])
 def test_unrelated_runtime_paths_still_match_released_v122(name):
     nodes = ast.parse((ROOT/'dictate.py').read_text()).body
     parts = name.split('.')

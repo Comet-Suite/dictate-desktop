@@ -62,6 +62,10 @@ def harness(qt_focus, monkeypatch):
     app._dictation_shortcut_registered = False
     app._shortcut_input_filter = m._DictationShortcutFilter(app)
     app.pill, app.toast, app.dialog = pill, toast, d
+    pill.record_requested.connect(app.start_popup_recording)
+    pill.cancel_requested.connect(app.cancel_popup_recording)
+    pill.pause_requested.connect(app.pause_popup_recording)
+    pill.commit_requested.connect(app.commit_popup_recording)
     app.tray = Mock()
     app.say = types.MethodType(m.App.say, app)
     d.show()

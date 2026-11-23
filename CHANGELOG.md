@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.6 — Hover recording controls and Windows-key shortcuts
+
+- Fix the popup mic to start an explicit complete-session recording, retaining cold-load intent until the model is ready. Passive popup show/preload remains silent.
+- Use a centered idle mic and a full-width animated waveform. Show ✕ / Pause–Resume / ✓ **only on hover and over the bars**, never as a separate row. Move Settings to the right-click menu.
+- Cancel discards without pasting, hides and safely unloads after inference/loading finishes; the tray app remains running. Confirm commits once with the existing Auto Enter preference and hides without flashing a visible idle mic.
+- Add Win/Windows/Meta alias support and native shortcut capture, including Win+H and Win+V. Keep Ctrl+Alt+D and Ctrl+Alt+Space as the two defaults.
+- Transfer duplicate assignments automatically, stop cleared bindings, roll back failed registrations, invalidate queued stale activations and join native registration threads at teardown.
+- Intercept exact supported assigned Win chords on a dedicated runtime-only low-level hook; consume their repeats/key-up and mask the Start menu. Do not change registry/policies or claim protected security combinations are overrideable.
+- Preserve the v1.2.5 lock, all five sizes, saved appearance, one unload policy, settings layout, artwork, model/download catalog, native isolation, symbols/numbers/mappings, whole-session paste, focus, startup and update protections.
+- Expand synthetic hover/controller/keyboard regressions and frozen/installed Windows shortcut verification. Advance the real in-place upgrade fixture to the final hash-pinned published 1.2.5 installer, preserving its saved popup preferences. Add a no-publication Windows preflight and refuse to overwrite historical releases.
+
 ## 1.2.5 — Popup controls and one unload policy
 
 - Add a saved, default-on position lock that blocks drag-release mistakes without disabling popup buttons; preserve deliberate preset positioning and unlocked dragging.
