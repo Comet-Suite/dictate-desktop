@@ -4185,18 +4185,48 @@ class _WindowsShortcutHook(QObject):
 
 
 class ShortcutEdit(QKeySequenceEdit):
-    """Capture Win+H/Win+V without launching the corresponding Windows feature."""
+    """Capture native chords once; don't let forwarded modifiers/masks edit them."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._native_capture = False
+        self.installEventFilter(self)
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if (os.name == 'nt' and getattr(self, '_native_capture', False)
+                and event.type() in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride)):
+            key, mods = event.key(), event.modifiers()
+            if (key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
+                    and not mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+                                    | Qt.KeyboardModifier.MetaModifier)):
+                return super().eventFilter(watched, event)  # keep normal focus traversal
+            if event.type() == QEvent.Type.KeyPress:
+                if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete) and mods == Qt.KeyboardModifier.NoModifier:
+                    self.clear()
+                elif key == Qt.Key.Key_Escape and mods == Qt.KeyboardModifier.NoModifier:
+                    self.clearFocus()
+            # The hook already queues the canonical chord. Standard Qt capture
+            # must not overwrite it with Win-up, Alt-up or the harmless VK mask.
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
     def focusInEvent(self, event):
         super().focusInEvent(event)
         if os.name == 'nt':
-            _WindowsShortcutHook.instance().set_capture(self)
+            router = _WindowsShortcutHook.instance()
+            self._native_capture = router.set_capture(self)
+            self.setToolTip('' if self._native_capture else router.last_error)
 
     def focusOutEvent(self, event):
+        self._native_capture = False
         if os.name == 'nt' and _WindowsShortcutHook._instance is not None:
             _WindowsShortcutHook._instance.end_capture(self)
         super().focusOutEvent(event)
 
     def hideEvent(self, event):
+        self._native_capture = False
         if os.name == 'nt' and _WindowsShortcutHook._instance is not None:
             _WindowsShortcutHook._instance.end_capture(self)
         super().hideEvent(event)
@@ -4493,7 +4523,10 @@ def _check_windows_shortcuts(application):
         editor.setFocus()
         wait_for(lambda: router._capture_target is not None and router._capture_target() is editor)
         chord(8, 0x56)
-        assert editor.keySequence() == QKeySequence('Meta+V')
+        assert editor.keySequence() == QKeySequence('Meta+V'), {
+            'editor_sequence': editor.keySequence().toString(QKeySequence.SequenceFormat.PortableText),
+            'native_capture': editor._native_capture, 'counts': dict(calls),
+            'handled_events': router.intercepted_events, 'modifier_state': router.state.modifiers}
         assert calls['second'] == 1 and observation['keys'][0x56] == 0
         checks.append('focused_shortcut_editor_captures_win_v_without_firing_binding_or_native_feature')
         chord(2 | 1, 0x20)

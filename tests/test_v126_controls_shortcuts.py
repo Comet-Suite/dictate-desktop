@@ -585,3 +585,32 @@ def test_mic_intent_survives_unload_before_the_old_model_pointer_is_cleared(popu
     scheduled[0][1]()
     e.load_model.assert_called_once_with(str(path))
     assert not e.recording and app._dictation_after_load
+
+
+@pytest.mark.parametrize('child', [False, True])
+@pytest.mark.parametrize('key', [Qt.Key.Key_Meta, Qt.Key.Key_Alt, Qt.Key.Key_unknown])
+def test_qt_forwarded_modifiers_and_mask_cannot_overwrite_native_capture(router, qt, child, key):
+    from PyQt6.QtGui import QKeyEvent
+    editor = m.ShortcutEdit()
+    editor._native_capture = True
+    target = editor.findChild(m.QLineEdit) if child else editor
+    try:
+        editor.receive_windows_shortcut(8, 0x56)
+        for kind in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            event = QKeyEvent(kind, key, Qt.KeyboardModifier.MetaModifier)
+            m.QApplication.sendEvent(target, event)
+        assert editor.keySequence() == QKeySequence('Meta+V')
+    finally:
+        editor._native_capture = False; editor.deleteLater(); pump(qt, 5)
+
+
+@pytest.mark.parametrize('key', [Qt.Key.Key_Backspace, Qt.Key.Key_Delete])
+def test_native_shortcut_capture_still_allows_clearing_with_delete_or_backspace(router, qt, key):
+    from PyQt6.QtGui import QKeyEvent
+    editor = m.ShortcutEdit(QKeySequence('Meta+H')); editor._native_capture = True
+    try:
+        event = QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)
+        m.QApplication.sendEvent(editor.findChild(m.QLineEdit), event)
+        assert editor.keySequence().isEmpty()
+    finally:
+        editor._native_capture = False; editor.deleteLater(); pump(qt, 5)
